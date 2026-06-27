@@ -40,8 +40,8 @@ treated as public documentation or release contract.
 - **Preferred architecture:** the n8n node acts as the ACP client. Do not add a
   separate runner service unless it has a concrete job such as durable background
   sessions, auth isolation, sandboxing, or shared profile management.
-- **Harnesses:** OpenCode ACP is a likely first target, but do not hard-code
-  OpenCode into the node API.
+- **Harnesses:** OpenCode ACP is the first target, but do not hard-code OpenCode
+  or ACP-native worker assumptions into the node API.
 
 ### Stack
 
@@ -49,7 +49,8 @@ treated as public documentation or release contract.
   harness runtime.
 - **Go runtime layout:** keep `cmd/acp-proxy` to process startup and flags,
   `internal/` for non-public proxy logic, and `pkg/` for the import surface
-  used by customized harness runtimes.
+  used by customized harness runtimes. The public side facing n8n is ACP; the
+  worker-facing leg can vary by harness.
 - **Package manager:** pnpm via Corepack for `node/` only.
 - **n8n package shape:** community node package in `node/` with
   `dist/credentials/...` and `dist/nodes/...` entrypoints declared in
@@ -121,3 +122,6 @@ session. If an existing line already covers the correction, tighten it instead.
 - Before implementing node behavior, inspect the built-in n8n AI Agent node and
   mirror its input, output-parser, tool-input, and `continueOnFail` contracts
   where practical.
+- Do not assume every harness is an ACP server: Codex exposes its own JRPC app
+  server, so a Codex harness should replace the ACP-worker leg with an
+  ACP-to-Codex-app-server leg while keeping the n8n-facing ACP endpoint.
