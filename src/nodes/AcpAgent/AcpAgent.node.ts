@@ -6,6 +6,7 @@ import type {
 	INodeTypeDescription,
 } from 'n8n-workflow';
 import { NodeConnectionTypes } from 'n8n-workflow';
+import { randomUUID } from 'node:crypto';
 import net from 'node:net';
 
 const CRED = 'acpAgentApi';
@@ -21,10 +22,13 @@ export class AcpAgent implements INodeType {
 		version: 1,
 		description: 'Run workflow data through an ACP-enabled agent harness',
 		defaults: { name: 'ACP Agent' },
-		inputs: `={{ $parameter.hasOutputParser ? [{ type: '${NodeConnectionTypes.Main}' }, { displayName: 'Output Parser', maxConnections: 1, type: '${NodeConnectionTypes.AiOutputParser}' }] : ['${NodeConnectionTypes.Main}'] }}`,
+		inputs: `={{ [{ type: '${NodeConnectionTypes.Main}' }, { displayName: 'Tools', type: '${NodeConnectionTypes.AiTool}' }, ...($parameter.hasOutputParser ? [{ displayName: 'Output Parser', maxConnections: 1, type: '${NodeConnectionTypes.AiOutputParser}' }] : [])] }}`,
 		outputs: [NodeConnectionTypes.Main],
 		builderHint: {
 			inputs: {
+				ai_tool: {
+					required: false,
+				},
 				ai_outputParser: {
 					required: false,
 					displayOptions: { show: { hasOutputParser: [true] } },
@@ -103,10 +107,12 @@ export class AcpAgent implements INodeType {
 		for (let i = 0; i < items.length; i++) {
 			try {
 				const outputParser = await outputParserForItem(this, i);
+				const tools = await connectedTools(this);
 				const text = await runAcpPrompt(endpoint, {
 					prompt: promptWithFormatInstructions(promptForItem(this, items[i], i), outputParser),
 					cwd: String(this.getNodeParameter('cwd', i)),
 					timeoutMs: Number(this.getNodeParameter('timeoutSeconds', i)) * 1000,
+					tools,
 				});
 				out.push({ json: await outputForText(text, outputParser), pairedItem: { item: i } });
 			} catch (error) {
@@ -130,20 +136,30 @@ interface AcpPrompt {
 	prompt: string;
 	cwd: string;
 	timeoutMs: number;
+	tools: AcpTool[];
 }
 
 interface JsonRpcMessage {
 	jsonrpc: string;
-	id?: number;
+	id?: number | string;
 	method?: string;
-	params?: IDataObject;
-	result?: IDataObject;
+	params?: IDataObject | null;
+	result?: unknown;
 	error?: { message?: string; code?: number; data?: unknown };
 }
 
 interface OutputParserLike {
 	parse(text: string): Promise<unknown>;
 	getFormatInstructions?(): string;
+}
+
+interface AcpTool {
+	name: string;
+	description?: string;
+	schema?: unknown;
+	invoke?: (input: unknown) => Promise<unknown>;
+	call?: (input: unknown) => Promise<unknown>;
+	func?: (input: unknown) => Promise<unknown>;
 }
 
 async function outputParserForItem(
@@ -163,6 +179,45 @@ async function outputParserForItem(
 
 function isOutputParser(value: unknown): value is OutputParserLike {
 	return isObject(value) && typeof value.parse === 'function';
+}
+
+async function connectedTools(ctx: IExecuteFunctions): Promise<AcpTool[]> {
+	const input = await ctx.getInputConnectionData(NodeConnectionTypes.AiTool, 0);
+	const tools = flattenTools(input);
+	const names = new Set<string>();
+
+	for (const tool of tools) {
+		if (tool.name === '') {
+			throw new Error('Connected tool did not supply a name');
+		}
+		if (names.has(tool.name)) {
+			throw new Error(`You have multiple tools with the same name: '${tool.name}', please rename them to avoid conflicts`);
+		}
+		names.add(tool.name);
+	}
+
+	return tools;
+}
+
+function flattenTools(value: unknown): AcpTool[] {
+	if (Array.isArray(value)) {
+		return value.flatMap((item) => flattenTools(item));
+	}
+	if (isObject(value) && Array.isArray(value.tools)) {
+		return flattenTools(value.tools);
+	}
+	if (isAcpTool(value)) {
+		return [value];
+	}
+	return [];
+}
+
+function isAcpTool(value: unknown): value is AcpTool {
+	return (
+		isObject(value) &&
+		typeof value.name === 'string' &&
+		(typeof value.invoke === 'function' || typeof value.call === 'function' || typeof value.func === 'function')
+	);
 }
 
 function promptForItem(ctx: IExecuteFunctions, item: INodeExecutionData, itemIndex: number): string {
@@ -218,6 +273,7 @@ function parseAcpEndpoint(rawUrl: string): AcpEndpoint {
 async function runAcpPrompt(endpoint: AcpEndpoint, input: AcpPrompt): Promise<string> {
 	const client = await AcpConnection.connect(endpoint, input.timeoutMs);
 	try {
+		const toolset = input.tools.length > 0 ? installToolset(client, input.tools) : undefined;
 		await client.request('initialize', {
 			protocolVersion: ACP_VERSION,
 			clientCapabilities: {},
@@ -228,7 +284,16 @@ async function runAcpPrompt(endpoint: AcpEndpoint, input: AcpPrompt): Promise<st
 		});
 		const session = await client.request('session/new', {
 			cwd: input.cwd,
-			mcpServers: [],
+			mcpServers:
+				toolset === undefined
+					? []
+					: [
+							{
+								type: 'acp',
+								name: 'n8n-tools',
+								id: toolset.id,
+							},
+						],
 		});
 		const sessionId = String(session.sessionId ?? '');
 		if (sessionId === '') {
@@ -251,6 +316,172 @@ async function runAcpPrompt(endpoint: AcpEndpoint, input: AcpPrompt): Promise<st
 	} finally {
 		client.close();
 	}
+}
+
+interface Toolset {
+	id: string;
+	tools: AcpTool[];
+	connections: Map<string, string>;
+}
+
+function installToolset(client: AcpConnection, tools: AcpTool[]): Toolset {
+	const toolset = { id: randomUUID(), tools, connections: new Map<string, string>() };
+
+	client.onRequest('mcp/connect', (params) => {
+		if (params.acpId !== toolset.id) {
+			throw new RpcError(-32602, 'Unknown MCP server id');
+		}
+		const connectionId = randomUUID();
+		toolset.connections.set(connectionId, toolset.id);
+		return { connectionId };
+	});
+
+	client.onRequest('mcp/message', async (params) => {
+		const connectionId = typeof params.connectionId === 'string' ? params.connectionId : '';
+		if (!toolset.connections.has(connectionId)) {
+			throw new RpcError(-32602, 'Unknown MCP connection id');
+		}
+		const method = typeof params.method === 'string' ? params.method : '';
+		const innerParams = isObject(params.params) ? params.params : {};
+
+		if (method === 'tools/list') {
+			return { tools: toolset.tools.map(toolDescription) };
+		}
+		if (method === 'tools/call') {
+			return await callTool(toolset.tools, innerParams);
+		}
+		throw new RpcError(-32601, `Unknown MCP method: ${method}`);
+	});
+
+	client.onRequest('mcp/disconnect', (params) => {
+		const connectionId = typeof params.connectionId === 'string' ? params.connectionId : '';
+		toolset.connections.delete(connectionId);
+		return {};
+	});
+
+	return toolset;
+}
+
+function toolDescription(tool: AcpTool): IDataObject {
+	return {
+		name: tool.name,
+		description: tool.description ?? '',
+		inputSchema: zodLikeToJsonSchema(tool.schema),
+	};
+}
+
+async function callTool(tools: AcpTool[], params: IDataObject): Promise<IDataObject> {
+	const name = typeof params.name === 'string' ? params.name : '';
+	const tool = tools.find((candidate) => candidate.name === name);
+	if (tool === undefined) {
+		throw new RpcError(-32602, 'Tool not found');
+	}
+	const args = isObject(params.arguments) ? params.arguments : {};
+
+	try {
+		const result = await invokeTool(tool, args);
+		return formatToolResult(result);
+	} catch (error) {
+		return {
+			isError: true,
+			content: [{ type: 'text', text: errorMessage(error) }],
+		};
+	}
+}
+
+async function invokeTool(tool: AcpTool, args: IDataObject): Promise<unknown> {
+	if (typeof tool.invoke === 'function') {
+		return await tool.invoke(args);
+	}
+	if (typeof tool.call === 'function') {
+		return await tool.call(args);
+	}
+	if (typeof tool.func === 'function') {
+		return await tool.func(args);
+	}
+	throw new Error(`Tool ${tool.name} cannot be invoked`);
+}
+
+function formatToolResult(result: unknown): IDataObject {
+	const text = textForToolResult(result);
+	return { content: [{ type: 'text', text }] };
+}
+
+function textForToolResult(result: unknown): string {
+	if (typeof result === 'string') {
+		return result;
+	}
+	if (result === null || result === undefined || typeof result === 'number' || typeof result === 'boolean' || typeof result === 'bigint') {
+		return String(result);
+	}
+	try {
+		return JSON.stringify(result) ?? String(result);
+	} catch {
+		return String(result);
+	}
+}
+
+function zodLikeToJsonSchema(schema: unknown): IDataObject {
+	if (!isObject(schema) || !isObject(schema._def)) {
+		return fallbackToolSchema();
+	}
+
+	const def = schema._def;
+	const typeName = typeof def.typeName === 'string' ? def.typeName : '';
+	const description = typeof schema.description === 'string' ? { description: schema.description } : {};
+
+	switch (typeName) {
+		case 'ZodObject': {
+			const shapeValue = typeof def.shape === 'function' ? (def.shape as () => unknown)() : def.shape;
+			const shape = isObject(shapeValue) ? shapeValue : {};
+			const properties: IDataObject = {};
+			const required: string[] = [];
+			for (const [key, child] of Object.entries(shape)) {
+				properties[key] = zodLikeToJsonSchema(child);
+				if (!isOptionalZod(child)) {
+					required.push(key);
+				}
+			}
+			return { type: 'object', properties, required, additionalProperties: false, ...description };
+		}
+		case 'ZodString':
+			return { type: 'string', ...description };
+		case 'ZodNumber':
+			return { type: 'number', ...description };
+		case 'ZodBoolean':
+			return { type: 'boolean', ...description };
+		case 'ZodArray':
+			return { type: 'array', items: zodLikeToJsonSchema(def.type), ...description };
+		case 'ZodOptional':
+		case 'ZodNullable':
+		case 'ZodDefault':
+			return zodLikeToJsonSchema(def.innerType);
+		case 'ZodEffects':
+			return zodLikeToJsonSchema(def.schema);
+		case 'ZodEnum':
+			return { type: 'string', enum: Array.isArray(def.values) ? def.values : [], ...description };
+		case 'ZodLiteral':
+			return { const: def.value, ...description };
+		case 'ZodUnion':
+			return { anyOf: Array.isArray(def.options) ? def.options.map(zodLikeToJsonSchema) : [], ...description };
+		default:
+			// ponytail: tiny Zod v3 converter; add zod-to-json-schema only if tool schemas need it.
+			return fallbackToolSchema();
+	}
+}
+
+function isOptionalZod(value: unknown): boolean {
+	return isObject(value) && isObject(value._def) && ['ZodOptional', 'ZodDefault'].includes(String(value._def.typeName));
+}
+
+function fallbackToolSchema(): IDataObject {
+	return {
+		type: 'object',
+		properties: {
+			input: { type: 'string' },
+		},
+		required: ['input'],
+	};
 }
 
 function agentTextChunk(message: JsonRpcMessage, sessionId: string): string | undefined {
@@ -279,6 +510,7 @@ class AcpConnection {
 	>();
 
 	private readonly listeners: Array<(message: JsonRpcMessage) => void> = [];
+	private readonly requestHandlers = new Map<string, (params: IDataObject) => Promise<unknown> | unknown>();
 	private buffer = '';
 	private nextId = 1;
 	private closed = false;
@@ -339,6 +571,10 @@ class AcpConnection {
 		this.listeners.push(listener);
 	}
 
+	onRequest(method: string, handler: (params: IDataObject) => Promise<unknown> | unknown): void {
+		this.requestHandlers.set(method, handler);
+	}
+
 	close(): void {
 		this.closed = true;
 		this.socket.end();
@@ -371,22 +607,62 @@ class AcpConnection {
 	}
 
 	private dispatch(message: JsonRpcMessage): void {
-		if (message.id !== undefined) {
+		if (typeof message.id === 'number') {
 			const pending = this.pending.get(message.id);
 			if (pending !== undefined) {
 				this.pending.delete(message.id);
 				if (message.error !== undefined) {
 					pending.reject(new Error(message.error.message ?? `ACP error ${message.error.code ?? ''}`));
 				} else {
-					pending.resolve(message.result ?? {});
+					pending.resolve(isObject(message.result) ? message.result : {});
 				}
 				return;
 			}
 		}
 
+		if (message.id !== undefined && message.method !== undefined) {
+			void this.handleRequest(message);
+			return;
+		}
+
 		for (const listener of this.listeners) {
 			listener(message);
 		}
+	}
+
+	private async handleRequest(message: JsonRpcMessage): Promise<void> {
+		const id = message.id;
+		const method = message.method ?? '';
+		const handler = this.requestHandlers.get(method);
+		if (handler === undefined) {
+			this.respondError(id, -32601, `Unknown ACP method: ${method}`);
+			return;
+		}
+
+		try {
+			const params = isObject(message.params) ? message.params : {};
+			this.respond(id, await handler(params));
+		} catch (error) {
+			if (error instanceof RpcError) {
+				this.respondError(id, error.code, error.message);
+			} else {
+				this.respondError(id, -32000, errorMessage(error));
+			}
+		}
+	}
+
+	private respond(id: number | string | undefined, result: unknown): void {
+		if (id === undefined) {
+			return;
+		}
+		this.socket.write(`${JSON.stringify({ jsonrpc: JSON_RPC_VERSION, id, result })}\n`);
+	}
+
+	private respondError(id: number | string | undefined, code: number, message: string): void {
+		if (id === undefined) {
+			return;
+		}
+		this.socket.write(`${JSON.stringify({ jsonrpc: JSON_RPC_VERSION, id, error: { code, message } })}\n`);
 	}
 
 	private failAll(error: Error): void {
@@ -397,5 +673,14 @@ class AcpConnection {
 			pending.reject(error);
 		}
 		this.pending.clear();
+	}
+}
+
+class RpcError extends Error {
+	constructor(
+		readonly code: number,
+		message: string,
+	) {
+		super(message);
 	}
 }

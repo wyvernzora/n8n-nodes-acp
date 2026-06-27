@@ -5,7 +5,7 @@ ARG TARGETARCH
 
 RUN set -eux; \
 	apt-get update; \
-	apt-get install -y --no-install-recommends ca-certificates curl ripgrep socat tar; \
+	apt-get install -y --no-install-recommends ca-certificates curl nodejs ripgrep tar; \
 	rm -rf /var/lib/apt/lists/*; \
 	case "${TARGETARCH}" in \
 		amd64) opencode_arch="x64" ;; \
@@ -22,7 +22,9 @@ RUN set -eux; \
 
 COPY harness/opencode/opencode.jsonc /etc/opencode/opencode.jsonc
 COPY harness/opencode/listen.sh /usr/local/bin/opencode-acp-listen
-RUN chmod 0755 /usr/local/bin/opencode-acp-listen
+COPY harness/opencode/acp-proxy.js /usr/local/bin/opencode-acp-proxy
+COPY harness/opencode/acp-mcp-stdio-bridge.js /usr/local/bin/acp-mcp-stdio-bridge
+RUN chmod 0755 /usr/local/bin/opencode-acp-listen /usr/local/bin/opencode-acp-proxy /usr/local/bin/acp-mcp-stdio-bridge
 
 USER 10001:10001
 WORKDIR /workspace
