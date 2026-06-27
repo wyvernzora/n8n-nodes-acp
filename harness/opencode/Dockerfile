@@ -1,3 +1,10 @@
+FROM golang:1.24-bookworm AS runtime-build
+
+WORKDIR /src/harness/runtime
+COPY harness/runtime/go.mod ./
+COPY harness/runtime/cmd ./cmd
+RUN CGO_ENABLED=0 go build -trimpath -o /out/opencode-acp-proxy ./cmd/acp-proxy
+
 FROM debian:bookworm-slim
 
 ARG OPENCODE_VERSION=1.17.9
@@ -5,7 +12,7 @@ ARG TARGETARCH
 
 RUN set -eux; \
 	apt-get update; \
-	apt-get install -y --no-install-recommends ca-certificates curl nodejs ripgrep tar; \
+	apt-get install -y --no-install-recommends ca-certificates curl ripgrep tar; \
 	rm -rf /var/lib/apt/lists/*; \
 	case "${TARGETARCH}" in \
 		amd64) opencode_arch="x64" ;; \
@@ -22,9 +29,8 @@ RUN set -eux; \
 
 COPY harness/opencode/opencode.jsonc /etc/opencode/opencode.jsonc
 COPY harness/opencode/listen.sh /usr/local/bin/opencode-acp-listen
-COPY harness/runtime/acp-proxy.js /usr/local/bin/opencode-acp-proxy
-COPY harness/runtime/acp-mcp-stdio-bridge.js /usr/local/bin/acp-mcp-stdio-bridge
-RUN chmod 0755 /usr/local/bin/opencode-acp-listen /usr/local/bin/opencode-acp-proxy /usr/local/bin/acp-mcp-stdio-bridge
+COPY --from=runtime-build /out/opencode-acp-proxy /usr/local/bin/opencode-acp-proxy
+RUN chmod 0755 /usr/local/bin/opencode-acp-listen /usr/local/bin/opencode-acp-proxy
 
 USER 10001:10001
 WORKDIR /workspace

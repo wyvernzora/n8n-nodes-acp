@@ -1,5 +1,6 @@
 PNPM ?= corepack pnpm
 DOCKER ?= docker
+GO ?= go
 
 .PHONY: build typecheck lint test hooks-install \
 	node-install node-build node-typecheck node-dev node-image \
@@ -34,8 +35,7 @@ node-image:
 	$(DOCKER) build -f node/image/Dockerfile -t ghcr.io/wyvernzora/n8n-acp/node:dev .
 
 harness-build:
-	node --check harness/runtime/acp-proxy.js
-	node --check harness/runtime/acp-mcp-stdio-bridge.js
+	cd harness/runtime && $(GO) test ./...
 
 harness-smoke:
 	scripts/smoke-opencode-acp.sh

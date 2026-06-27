@@ -5,7 +5,7 @@ n8n community node plus ACP harness sidecar pieces.
 ## Layout
 
 - `node/` - `n8n-nodes-acp` package.
-- `harness/runtime/` - generic ACP proxy and MCP stdio bridge.
+- `harness/runtime/` - generic Go ACP proxy and MCP stdio bridge.
 - `harness/opencode/` - OpenCode sidecar image.
 - `e2e/` - cross-component smoke tests.
 

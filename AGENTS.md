@@ -14,7 +14,7 @@ Canonical references:
 - [`Makefile`](Makefile) - root build/test/image orchestration.
 - `node/package.json` - n8n package metadata and entrypoints.
 - `node/src/` - live node and credential implementation.
-- `harness/runtime/` - generic ACP proxy and MCP bridge scripts.
+- `harness/runtime/` - generic Go ACP proxy and MCP bridge runtime.
 - `harness/opencode/` - OpenCode sidecar image.
 
 `docs.private/` may contain local planning context. It is gitignored and must not be
@@ -45,7 +45,8 @@ treated as public documentation or release contract.
 
 ### Stack
 
-- **Language:** TypeScript on Node 20.15+.
+- **Language:** TypeScript on Node 20.15+ for the n8n node, Go for the generic
+  harness runtime.
 - **Package manager:** pnpm via Corepack for `node/` only.
 - **n8n package shape:** community node package in `node/` with
   `dist/credentials/...` and `dist/nodes/...` entrypoints declared in

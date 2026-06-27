@@ -1,7 +1,7 @@
 # OpenCode ACP Harness
 
-Sidecar container for exposing OpenCode's stdio ACP server over TCP, with a tiny
-proxy for ACP-transport MCP tools.
+Sidecar container for exposing OpenCode's stdio ACP server over TCP, with a
+small Go proxy for ACP-transport MCP tools.
 
 ```sh
 docker build -f harness/opencode/Dockerfile -t ghcr.io/wyvernzora/n8n-acp/harness-opencode:dev .
