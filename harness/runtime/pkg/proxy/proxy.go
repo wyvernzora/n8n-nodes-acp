@@ -1,3 +1,5 @@
+// Package proxy exposes the ACP harness proxy runtime for custom sidecar
+// binaries.
 package proxy
 
 import (
@@ -18,6 +20,7 @@ type Config struct {
 	ErrorWriter   io.Writer
 }
 
+// DefaultConfig returns the OpenCode sidecar defaults.
 func DefaultConfig() Config {
 	return Config{
 		Host:          "127.0.0.1",
@@ -29,6 +32,7 @@ func DefaultConfig() Config {
 	}
 }
 
+// ConfigFromEnv returns DefaultConfig with ACP_* environment overrides applied.
 func ConfigFromEnv() Config {
 	cfg := DefaultConfig()
 	cfg.Host = envDefault("ACP_HOST", cfg.Host)
@@ -41,6 +45,8 @@ func ConfigFromEnv() Config {
 	return cfg
 }
 
+// Run listens for ACP TCP connections and starts one stdio ACP worker per
+// connection.
 func Run(ctx context.Context, cfg Config) error {
 	return internalproxy.Run(ctx, internalproxy.Config{
 		Host:          cfg.Host,
@@ -52,6 +58,7 @@ func Run(ctx context.Context, cfg Config) error {
 	})
 }
 
+// RunBridge starts the stdio MCP bridge for one ACP tool session.
 func RunBridge(ctx context.Context, socketPath string, acpID string) error {
 	return internalproxy.RunBridge(ctx, socketPath, acpID)
 }

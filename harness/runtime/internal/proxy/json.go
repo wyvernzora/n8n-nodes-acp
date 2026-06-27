@@ -21,16 +21,24 @@ type rpcError struct {
 	Message string `json:"message"`
 }
 
-func scanLines(r io.Reader, fn func([]byte)) error {
+func scanLines(r io.Reader, fn func([]byte) error) error {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
 		line := bytes.TrimSpace(scanner.Bytes())
-		if len(line) > 0 {
-			fn(append([]byte(nil), line...))
+		if len(line) == 0 {
+			continue
+		}
+		if err := fn(append([]byte(nil), line...)); err != nil {
+			return err
 		}
 	}
 	return scanner.Err()
+}
+
+func writeLine(w io.Writer, line []byte) error {
+	_, err := w.Write(append(line, '\n'))
+	return err
 }
 
 func rawObject(v any) json.RawMessage {

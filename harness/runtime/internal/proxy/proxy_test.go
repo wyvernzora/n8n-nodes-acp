@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 )
 
@@ -37,5 +39,29 @@ func TestRewriteSessionNewReplacesACPServer(t *testing.T) {
 		if server.Args[i] != wantArgs[i] {
 			t.Fatalf("args = %#v, want %#v", server.Args, wantArgs)
 		}
+	}
+}
+
+func TestScanLinesReturnsCallbackError(t *testing.T) {
+	expected := errors.New("stop")
+	err := scanLines(strings.NewReader("one\ntwo\n"), func(line []byte) error {
+		if string(line) != "one" {
+			t.Fatalf("line = %q, want one", line)
+		}
+		return expected
+	})
+	if !errors.Is(err, expected) {
+		t.Fatalf("scanLines error = %v, want %v", err, expected)
+	}
+}
+
+func TestHandleMCPUnknownMethod(t *testing.T) {
+	_, err := handleMCP(nil, nil, "", rpcMessage{Method: "bogus"})
+	var methodErr *mcpError
+	if !errors.As(err, &methodErr) {
+		t.Fatalf("handleMCP error = %T, want *mcpError", err)
+	}
+	if methodErr.code != -32601 {
+		t.Fatalf("method error code = %d, want -32601", methodErr.code)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"sync"
@@ -20,15 +21,29 @@ type bridgeClient struct {
 	pending map[string]chan rpcMessage
 }
 
-func RunBridge(_ context.Context, socketPath string, acpID string) error {
+type mcpError struct {
+	code    int
+	message string
+}
+
+func (e *mcpError) Error() string {
+	return e.message
+}
+
+func RunBridge(ctx context.Context, socketPath string, acpID string) error {
 	if socketPath == "" || acpID == "" {
 		return errors.New("usage: acp-proxy bridge <socket> <acp-id>")
 	}
-	conn, err := net.Dial("unix", socketPath)
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "unix", socketPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("connect bridge socket: %w", err)
 	}
 	defer conn.Close()
+	stopClose := context.AfterFunc(ctx, func() {
+		_ = conn.Close()
+	})
+	defer stopClose()
 
 	client := &bridgeClient{conn: conn, pending: map[string]chan rpcMessage{}}
 	var connectionID string
@@ -39,19 +54,24 @@ func RunBridge(_ context.Context, socketPath string, acpID string) error {
 	}()
 	go client.readLoop()
 
-	return scanLines(os.Stdin, func(line []byte) {
+	return scanLines(os.Stdin, func(line []byte) error {
 		var msg rpcMessage
 		if err := json.Unmarshal(line, &msg); err != nil || len(msg.ID) == 0 || msg.Method == "" {
-			return
+			return nil
 		}
 		result, err := handleMCP(&connectionID, client, acpID, msg)
 		if err != nil {
-			writeMCPError(msg.ID, -32000, err.Error())
-			return
+			code := -32000
+			var methodErr *mcpError
+			if errors.As(err, &methodErr) {
+				code = methodErr.code
+			}
+			return writeMCPError(os.Stdout, msg.ID, code, err.Error())
 		}
 		if result != nil {
-			writeMCPResult(msg.ID, result)
+			return writeMCPResult(os.Stdout, msg.ID, result)
 		}
+		return nil
 	})
 }
 
@@ -98,8 +118,7 @@ func handleMCP(connectionID *string, client *bridgeClient, acpID string, msg rpc
 			"params":       params,
 		}))
 	default:
-		writeMCPError(msg.ID, -32601, "Unknown MCP method: "+msg.Method)
-		return nil, nil
+		return nil, &mcpError{code: -32601, message: "unknown mcp method: " + msg.Method}
 	}
 }
 
@@ -136,10 +155,10 @@ func (c *bridgeClient) request(method string, params json.RawMessage) (json.RawM
 }
 
 func (c *bridgeClient) readLoop() {
-	_ = scanLines(c.conn, func(line []byte) {
+	_ = scanLines(c.conn, func(line []byte) error {
 		var msg rpcMessage
 		if err := json.Unmarshal(line, &msg); err != nil {
-			return
+			return nil
 		}
 		key := idKey(msg.ID)
 		c.mu.Lock()
@@ -149,8 +168,9 @@ func (c *bridgeClient) readLoop() {
 		if ch != nil {
 			ch <- msg
 		}
+		return nil
 	})
-	c.failPending("ACP MCP bridge closed")
+	c.failPending("acp mcp bridge closed")
 }
 
 func (c *bridgeClient) removePending(key string) {
@@ -169,12 +189,18 @@ func (c *bridgeClient) failPending(message string) {
 	}
 }
 
-func writeMCPResult(id json.RawMessage, result any) {
-	data, _ := json.Marshal(rpcMessage{JSONRPC: "2.0", ID: id, Result: rawObject(result)})
-	fmt.Println(string(data))
+func writeMCPResult(w io.Writer, id json.RawMessage, result any) error {
+	data, err := json.Marshal(rpcMessage{JSONRPC: "2.0", ID: id, Result: rawObject(result)})
+	if err != nil {
+		return fmt.Errorf("marshal mcp result: %w", err)
+	}
+	return writeLine(w, data)
 }
 
-func writeMCPError(id json.RawMessage, code int, message string) {
-	data, _ := json.Marshal(rpcMessage{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: code, Message: message}})
-	fmt.Println(string(data))
+func writeMCPError(w io.Writer, id json.RawMessage, code int, message string) error {
+	data, err := json.Marshal(rpcMessage{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: code, Message: message}})
+	if err != nil {
+		return fmt.Errorf("marshal mcp error: %w", err)
+	}
+	return writeLine(w, data)
 }

@@ -49,10 +49,10 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer listener.Close()
 
-	go func() {
-		<-ctx.Done()
+	stopClose := context.AfterFunc(ctx, func() {
 		_ = listener.Close()
-	}()
+	})
+	defer stopClose()
 
 	for {
 		conn, err := listener.Accept()
@@ -91,7 +91,7 @@ func handleACP(ctx context.Context, cfg Config, client net.Conn) error {
 
 	child, stdin, stdout, err := startWorker(ctx, cfg)
 	if err != nil {
-		return err
+		return fmt.Errorf("start acp worker: %w", err)
 	}
 	defer func() {
 		_ = stdin.Close()
@@ -99,27 +99,26 @@ func handleACP(ctx context.Context, cfg Config, client net.Conn) error {
 			_ = child.Process.Kill()
 		}
 		_ = child.Wait()
-		acp.failPending("ACP connection closed")
+		acp.failPending("acp connection closed")
 	}()
 
 	go func() {
-		_ = scanLines(stdout, func(line []byte) {
-			_ = acp.writeClient(line)
+		_ = scanLines(stdout, func(line []byte) error {
+			return acp.writeClient(line)
 		})
 		_ = client.Close()
 	}()
 
-	return scanLines(client, func(line []byte) {
+	return scanLines(client, func(line []byte) error {
 		var msg rpcMessage
 		if err := json.Unmarshal(line, &msg); err != nil {
-			_, _ = stdin.Write(append(line, '\n'))
-			return
+			return writeLine(stdin, line)
 		}
 		if len(msg.ID) > 0 && msg.Method == "" && acp.deliverResponse(msg) {
-			return
+			return nil
 		}
 		rewritten := rewriteSessionNew(line, socketPath, cfg)
-		_, _ = stdin.Write(append(rewritten, '\n'))
+		return writeLine(stdin, rewritten)
 	})
 }
 
@@ -141,10 +140,10 @@ func startWorker(ctx context.Context, cfg Config) (*exec.Cmd, io.WriteCloser, io
 }
 
 func (c *acpConn) acceptBridges(ctx context.Context, listener net.Listener) {
-	go func() {
-		<-ctx.Done()
+	stopClose := context.AfterFunc(ctx, func() {
 		_ = listener.Close()
-	}()
+	})
+	defer stopClose()
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -156,10 +155,10 @@ func (c *acpConn) acceptBridges(ctx context.Context, listener net.Listener) {
 
 func (c *acpConn) handleBridge(conn net.Conn) {
 	defer conn.Close()
-	_ = scanLines(conn, func(line []byte) {
+	_ = scanLines(conn, func(line []byte) error {
 		var msg rpcMessage
 		if err := json.Unmarshal(line, &msg); err != nil || msg.Method == "" {
-			return
+			return nil
 		}
 		result, err := c.request(acpMethod(msg.Method), msg.Params)
 		response := rpcMessage{ID: msg.ID}
@@ -168,8 +167,11 @@ func (c *acpConn) handleBridge(conn net.Conn) {
 		} else {
 			response.Result = result
 		}
-		data, _ := json.Marshal(response)
-		_, _ = conn.Write(append(data, '\n'))
+		data, err := json.Marshal(response)
+		if err != nil {
+			return fmt.Errorf("marshal bridge response: %w", err)
+		}
+		return writeLine(conn, data)
 	})
 }
 
@@ -183,7 +185,7 @@ func (c *acpConn) request(method string, params json.RawMessage) (json.RawMessag
 		delete(c.pending, string(idRaw))
 		c.mu.Unlock()
 		if pending.ch != nil {
-			pending.ch <- rpcMessage{Error: &rpcError{Message: "ACP request timed out: " + method}}
+			pending.ch <- rpcMessage{Error: &rpcError{Message: "acp request timed out: " + method}}
 		}
 	})
 
