@@ -1,0 +1,14 @@
+commit-msg:
+  commands:
+    block-claude:
+      run: bash scripts/block-claude-commit-msg.sh {1}
+
+pre-commit:
+  parallel: false
+  commands:
+    lint:
+      run: git diff --cached --check
+    typecheck:
+      run: corepack pnpm typecheck
+    build:
+      run: corepack pnpm build
