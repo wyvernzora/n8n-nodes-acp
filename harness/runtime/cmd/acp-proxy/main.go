@@ -13,9 +13,10 @@ import (
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
+	err := run(ctx, os.Args[1:])
+	stop()
 
-	if err := run(ctx, os.Args[1:]); err != nil {
+	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

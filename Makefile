@@ -1,10 +1,18 @@
 PNPM ?= corepack pnpm
 DOCKER ?= docker
 GO ?= go
+GOLANGCI_LINT ?= $(shell GOBIN=$$($(GO) env GOBIN 2>/dev/null); GOPATH=$$($(GO) env GOPATH 2>/dev/null); \
+	if [ -n "$$GOBIN" ] && [ -x "$$GOBIN/golangci-lint" ]; then \
+		printf "%s/golangci-lint" "$$GOBIN"; \
+	elif [ -x "$$GOPATH/bin/golangci-lint" ]; then \
+		printf "%s/bin/golangci-lint" "$$GOPATH"; \
+	elif command -v golangci-lint >/dev/null 2>&1 && golangci-lint version >/dev/null 2>&1; then \
+		command -v golangci-lint; \
+	fi)
 
 .PHONY: build typecheck lint test hooks-install \
 	node-install node-build node-typecheck node-dev node-image \
-	harness-build harness-smoke harness-opencode-image \
+	harness-build harness-lint harness-smoke harness-opencode-image \
 	e2e e2e-self e2e-docker e2e-kind
 
 build: node-build harness-build
@@ -15,6 +23,7 @@ test: lint typecheck build e2e-self
 
 lint:
 	git diff --check
+	$(MAKE) harness-lint
 
 hooks-install:
 	lefthook install
@@ -36,6 +45,13 @@ node-image:
 
 harness-build:
 	cd harness/runtime && $(GO) test ./...
+
+harness-lint:
+	@if [ -z "$(GOLANGCI_LINT)" ]; then \
+		echo "golangci-lint not found. Install it with: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest"; \
+		exit 127; \
+	fi
+	cd harness/runtime && $(GOLANGCI_LINT) run ./...
 
 harness-smoke:
 	scripts/smoke-opencode-acp.sh
