@@ -26,6 +26,24 @@ export class AcpAgent implements INodeType {
 		credentials: [{ name: CRED, required: true }],
 		properties: [
 			{
+				displayName: 'Prompt Type',
+				name: 'promptType',
+				type: 'options',
+				options: [
+					{
+						name: 'Connected Chat Trigger Node',
+						value: 'auto',
+						description: 'Use the chatInput field from each input item',
+					},
+					{
+						name: 'Define Below',
+						value: 'define',
+						description: 'Use the prompt text configured on this node',
+					},
+				],
+				default: 'define',
+			},
+			{
 				displayName: 'Prompt',
 				name: 'prompt',
 				type: 'string',
@@ -33,6 +51,7 @@ export class AcpAgent implements INodeType {
 				default: '',
 				required: true,
 				description: 'Prompt sent to the ACP runner with each input item',
+				displayOptions: { show: { promptType: ['define'] } },
 			},
 			{
 				displayName: 'Working Directory',
@@ -60,12 +79,19 @@ export class AcpAgent implements INodeType {
 		const out: INodeExecutionData[] = [];
 
 		for (let i = 0; i < items.length; i++) {
-			const text = await runAcpPrompt(endpoint, {
-				prompt: String(this.getNodeParameter('prompt', i)),
-				cwd: String(this.getNodeParameter('cwd', i)),
-				timeoutMs: Number(this.getNodeParameter('timeoutSeconds', i)) * 1000,
-			});
-			out.push({ json: { output: text }, pairedItem: { item: i } });
+			try {
+				const text = await runAcpPrompt(endpoint, {
+					prompt: promptForItem(this, items[i], i),
+					cwd: String(this.getNodeParameter('cwd', i)),
+					timeoutMs: Number(this.getNodeParameter('timeoutSeconds', i)) * 1000,
+				});
+				out.push({ json: { output: text }, pairedItem: { item: i } });
+			} catch (error) {
+				if (!this.continueOnFail()) {
+					throw error;
+				}
+				out.push({ json: { error: errorMessage(error) }, pairedItem: { item: i } });
+			}
 		}
 
 		return [out];
@@ -90,6 +116,25 @@ interface JsonRpcMessage {
 	params?: IDataObject;
 	result?: IDataObject;
 	error?: { message?: string; code?: number; data?: unknown };
+}
+
+function promptForItem(ctx: IExecuteFunctions, item: INodeExecutionData, itemIndex: number): string {
+	const promptType = String(ctx.getNodeParameter('promptType', itemIndex));
+	if (promptType === 'auto') {
+		const chatInput = item.json.chatInput;
+		if (typeof chatInput !== 'string') {
+			throw new Error('Expected input item to contain a string chatInput field');
+		}
+		return chatInput;
+	}
+	return String(ctx.getNodeParameter('prompt', itemIndex));
+}
+
+function errorMessage(error: unknown): string {
+	if (error instanceof Error) {
+		return error.message;
+	}
+	return String(error);
 }
 
 function parseAcpEndpoint(rawUrl: string): AcpEndpoint {
