@@ -3,6 +3,8 @@ FROM golang:1.24-bookworm AS runtime-build
 WORKDIR /src/harness/runtime
 COPY harness/runtime/go.mod ./
 COPY harness/runtime/cmd ./cmd
+COPY harness/runtime/internal ./internal
+COPY harness/runtime/pkg ./pkg
 RUN CGO_ENABLED=0 go build -trimpath -o /out/opencode-acp-proxy ./cmd/acp-proxy
 
 FROM debian:bookworm-slim

@@ -1,4 +1,4 @@
-package main
+package proxy
 
 import (
 	"encoding/json"
@@ -6,9 +6,8 @@ import (
 )
 
 func TestRewriteSessionNewReplacesACPServer(t *testing.T) {
-	t.Setenv("ACP_PROXY_BRIDGE_COMMAND", "/bin/acp-proxy")
 	in := []byte(`{"jsonrpc":"2.0","id":1,"method":"session/new","params":{"cwd":"/workspace","mcpServers":[{"type":"acp","name":"n8n-tools","id":"tools-1"}]}}`)
-	out := rewriteSessionNew(in, "/tmp/bridge.sock")
+	out := rewriteSessionNew(in, "/tmp/bridge.sock", Config{BridgeCommand: "/bin/acp-proxy"})
 
 	var msg struct {
 		Params struct {

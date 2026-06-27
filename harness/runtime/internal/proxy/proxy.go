@@ -1,4 +1,4 @@
-package main
+package proxy
 
 import (
 	"context"
@@ -11,13 +11,21 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
 const requestTimeout = 10 * time.Minute
+
+type Config struct {
+	Host          string
+	Port          string
+	WorkerCommand string
+	WorkerArgs    []string
+	BridgeCommand string
+	ErrorWriter   io.Writer
+}
 
 type pendingRequest struct {
 	ch    chan rpcMessage
@@ -33,10 +41,9 @@ type acpConn struct {
 	pending map[string]pendingRequest
 }
 
-func runProxy(ctx context.Context) error {
-	host := envDefault("ACP_HOST", "127.0.0.1")
-	port := envDefault("ACP_PORT", "8080")
-	listener, err := net.Listen("tcp", net.JoinHostPort(host, port))
+func Run(ctx context.Context, cfg Config) error {
+	cfg = cfg.withDefaults()
+	listener, err := net.Listen("tcp", net.JoinHostPort(cfg.Host, cfg.Port))
 	if err != nil {
 		return fmt.Errorf("listen ACP proxy: %w", err)
 	}
@@ -56,14 +63,14 @@ func runProxy(ctx context.Context) error {
 			return fmt.Errorf("accept ACP proxy connection: %w", err)
 		}
 		go func() {
-			if err := handleACP(ctx, conn); err != nil && !errors.Is(err, net.ErrClosed) {
-				_, _ = fmt.Fprintln(os.Stderr, err)
+			if err := handleACP(ctx, cfg, conn); err != nil && !errors.Is(err, net.ErrClosed) {
+				_, _ = fmt.Fprintln(cfg.ErrorWriter, err)
 			}
 		}()
 	}
 }
 
-func handleACP(ctx context.Context, client net.Conn) error {
+func handleACP(ctx context.Context, cfg Config, client net.Conn) error {
 	defer client.Close()
 
 	dir, err := os.MkdirTemp("", "acp-mcp-")
@@ -82,7 +89,7 @@ func handleACP(ctx context.Context, client net.Conn) error {
 	acp := &acpConn{client: client, pending: map[string]pendingRequest{}}
 	go acp.acceptBridges(ctx, bridgeListener)
 
-	child, stdin, stdout, err := startWorker(ctx)
+	child, stdin, stdout, err := startWorker(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -111,16 +118,14 @@ func handleACP(ctx context.Context, client net.Conn) error {
 		if len(msg.ID) > 0 && msg.Method == "" && acp.deliverResponse(msg) {
 			return
 		}
-		rewritten := rewriteSessionNew(line, socketPath)
+		rewritten := rewriteSessionNew(line, socketPath, cfg)
 		_, _ = stdin.Write(append(rewritten, '\n'))
 	})
 }
 
-func startWorker(ctx context.Context) (*exec.Cmd, io.WriteCloser, io.Reader, error) {
-	command := envDefault("ACP_WORKER_COMMAND", "opencode")
-	args := workerArgs()
-	cmd := exec.CommandContext(ctx, command, args...)
-	cmd.Stderr = os.Stderr
+func startWorker(ctx context.Context, cfg Config) (*exec.Cmd, io.WriteCloser, io.Reader, error) {
+	cmd := exec.CommandContext(ctx, cfg.WorkerCommand, cfg.WorkerArgs...)
+	cmd.Stderr = cfg.ErrorWriter
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, nil, nil, err
@@ -133,13 +138,6 @@ func startWorker(ctx context.Context) (*exec.Cmd, io.WriteCloser, io.Reader, err
 		return nil, nil, nil, err
 	}
 	return cmd, stdin, stdout, nil
-}
-
-func workerArgs() []string {
-	if raw := strings.TrimSpace(os.Getenv("ACP_WORKER_ARGS")); raw != "" {
-		return strings.Fields(raw)
-	}
-	return []string{"acp", "--cwd", envDefault("OPENCODE_CWD", "/workspace")}
 }
 
 func (c *acpConn) acceptBridges(ctx context.Context, listener net.Listener) {
@@ -267,7 +265,7 @@ func acpMethod(method string) string {
 	}
 }
 
-func rewriteSessionNew(line []byte, socketPath string) []byte {
+func rewriteSessionNew(line []byte, socketPath string, cfg Config) []byte {
 	var root map[string]any
 	if err := json.Unmarshal(line, &root); err != nil || root["method"] != "session/new" {
 		return line
@@ -293,7 +291,7 @@ func rewriteSessionNew(line []byte, socketPath string) []byte {
 		servers[i] = map[string]any{
 			"type":    "stdio",
 			"name":    name,
-			"command": envDefault("ACP_PROXY_BRIDGE_COMMAND", selfPath()),
+			"command": cfg.BridgeCommand,
 			"args":    []string{"bridge", socketPath, id},
 			"env":     []any{},
 		}
@@ -305,16 +303,24 @@ func rewriteSessionNew(line []byte, socketPath string) []byte {
 	return encoded
 }
 
-func selfPath() string {
-	if exe, err := os.Executable(); err == nil {
-		return exe
+func (c Config) withDefaults() Config {
+	if c.Host == "" {
+		c.Host = "127.0.0.1"
 	}
-	return "acp-proxy"
-}
-
-func envDefault(key, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		return value
+	if c.Port == "" {
+		c.Port = "8080"
 	}
-	return fallback
+	if c.WorkerCommand == "" {
+		c.WorkerCommand = "opencode"
+	}
+	if c.WorkerArgs == nil {
+		c.WorkerArgs = []string{"acp", "--cwd", "/workspace"}
+	}
+	if c.BridgeCommand == "" {
+		c.BridgeCommand = "acp-proxy"
+	}
+	if c.ErrorWriter == nil {
+		c.ErrorWriter = os.Stderr
+	}
+	return c
 }

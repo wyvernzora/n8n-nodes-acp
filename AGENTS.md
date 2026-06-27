@@ -47,6 +47,9 @@ treated as public documentation or release contract.
 
 - **Language:** TypeScript on Node 20.15+ for the n8n node, Go for the generic
   harness runtime.
+- **Go runtime layout:** keep `cmd/acp-proxy` to process startup and flags,
+  `internal/` for non-public proxy logic, and `pkg/` for the import surface
+  used by customized harness runtimes.
 - **Package manager:** pnpm via Corepack for `node/` only.
 - **n8n package shape:** community node package in `node/` with
   `dist/credentials/...` and `dist/nodes/...` entrypoints declared in

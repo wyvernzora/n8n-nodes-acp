@@ -1,4 +1,4 @@
-package main
+package proxy
 
 import (
 	"context"
@@ -20,11 +20,11 @@ type bridgeClient struct {
 	pending map[string]chan rpcMessage
 }
 
-func runBridge(_ context.Context, args []string) error {
-	if len(args) != 2 {
+func RunBridge(_ context.Context, socketPath string, acpID string) error {
+	if socketPath == "" || acpID == "" {
 		return errors.New("usage: acp-proxy bridge <socket> <acp-id>")
 	}
-	conn, err := net.Dial("unix", args[0])
+	conn, err := net.Dial("unix", socketPath)
 	if err != nil {
 		return err
 	}
@@ -44,7 +44,7 @@ func runBridge(_ context.Context, args []string) error {
 		if err := json.Unmarshal(line, &msg); err != nil || len(msg.ID) == 0 || msg.Method == "" {
 			return
 		}
-		result, err := handleMCP(&connectionID, client, args[1], msg)
+		result, err := handleMCP(&connectionID, client, acpID, msg)
 		if err != nil {
 			writeMCPError(msg.ID, -32000, err.Error())
 			return
