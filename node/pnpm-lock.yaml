@@ -6,9 +6,7 @@ settings:
 
 importers:
 
-  .: {}
-
-  node:
+  .:
     devDependencies:
       '@types/node':
         specifier: ^22.10.0

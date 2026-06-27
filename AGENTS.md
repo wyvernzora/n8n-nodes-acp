@@ -11,7 +11,7 @@ apply unless explicitly contradicted here.
 Canonical references:
 
 - [`README.md`](README.md) - terse public project description.
-- [`package.json`](package.json) - private workspace scripts.
+- [`Makefile`](Makefile) - root build/test/image orchestration.
 - `node/package.json` - n8n package metadata and entrypoints.
 - `node/src/` - live node and credential implementation.
 - `harness/runtime/` - generic ACP proxy and MCP bridge scripts.
@@ -46,7 +46,7 @@ treated as public documentation or release contract.
 ### Stack
 
 - **Language:** TypeScript on Node 20.15+.
-- **Package manager:** pnpm via Corepack (`packageManager` in `package.json`).
+- **Package manager:** pnpm via Corepack for `node/` only.
 - **n8n package shape:** community node package in `node/` with
   `dist/credentials/...` and `dist/nodes/...` entrypoints declared in
   `node/package.json`.
@@ -61,16 +61,16 @@ treated as public documentation or release contract.
 ### Commands
 
 ```sh
-corepack pnpm install
-corepack pnpm hooks:install
-corepack pnpm lint
-corepack pnpm typecheck
-corepack pnpm build
+make node-install
+make hooks-install
+make lint
+make typecheck
+make build
 ```
 
-Run `corepack pnpm typecheck` before handing back code changes. Run
-`corepack pnpm build` when package output, tsconfig, or n8n entrypoints change.
-Run `corepack pnpm hooks:install` once per checkout to enable lefthook.
+Run `make typecheck` before handing back code changes. Run `make build` when
+package output, tsconfig, or n8n entrypoints change. Run `make hooks-install`
+once per checkout to enable lefthook.
 
 ---
 

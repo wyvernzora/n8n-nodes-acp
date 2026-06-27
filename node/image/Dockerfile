@@ -5,12 +5,10 @@
 # N8N_CUSTOM_EXTENSIONS.
 
 FROM node:24-alpine AS build
-WORKDIR /src
-RUN corepack enable
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY node/package.json ./node/package.json
-RUN corepack pnpm install --frozen-lockfile --filter n8n-nodes-acp...
 WORKDIR /src/node
+RUN corepack enable
+COPY node/package.json node/pnpm-lock.yaml ./
+RUN corepack pnpm install --frozen-lockfile
 COPY node/tsconfig.json ./
 COPY node/src/ ./src/
 RUN corepack pnpm build

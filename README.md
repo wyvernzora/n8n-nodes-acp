@@ -12,19 +12,19 @@ n8n community node plus ACP harness sidecar pieces.
 ## Development
 
 ```sh
-corepack pnpm install
-corepack pnpm typecheck
-corepack pnpm build
+make node-install
+make typecheck
+make build
 ```
 
 ## ACP harness
 
 ```sh
-corepack pnpm node:docker:build
-corepack pnpm harness:docker:build
+make node-image
+make harness-opencode-image
 docker push ghcr.io/wyvernzora/n8n-acp/node:dev
 docker push ghcr.io/wyvernzora/n8n-acp/harness-opencode:dev
-corepack pnpm harness:smoke
+make harness-smoke
 ```
 
 See `harness/opencode/` for sidecar details.

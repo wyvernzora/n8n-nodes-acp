@@ -7,8 +7,8 @@ pre-commit:
   parallel: false
   commands:
     lint:
-      run: git diff --cached --check
+      run: make lint
     typecheck:
-      run: corepack pnpm typecheck
+      run: make typecheck
     build:
-      run: corepack pnpm build
+      run: make build
