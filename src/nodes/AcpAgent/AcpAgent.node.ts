@@ -21,8 +21,16 @@ export class AcpAgent implements INodeType {
 		version: 1,
 		description: 'Run workflow data through an ACP-enabled agent harness',
 		defaults: { name: 'ACP Agent' },
-		inputs: [NodeConnectionTypes.Main],
+		inputs: `={{ $parameter.hasOutputParser ? [{ type: '${NodeConnectionTypes.Main}' }, { displayName: 'Output Parser', maxConnections: 1, type: '${NodeConnectionTypes.AiOutputParser}' }] : ['${NodeConnectionTypes.Main}'] }}`,
 		outputs: [NodeConnectionTypes.Main],
+		builderHint: {
+			inputs: {
+				ai_outputParser: {
+					required: false,
+					displayOptions: { show: { hasOutputParser: [true] } },
+				},
+			},
+		},
 		credentials: [{ name: CRED, required: true }],
 		properties: [
 			{
@@ -54,6 +62,20 @@ export class AcpAgent implements INodeType {
 				displayOptions: { show: { promptType: ['define'] } },
 			},
 			{
+				displayName: 'Require Specific Output Format',
+				name: 'hasOutputParser',
+				type: 'boolean',
+				default: false,
+				noDataExpression: true,
+			},
+			{
+				displayName: `Connect an <a data-action='openSelectiveNodeCreator' data-action-parameter-connectiontype='${NodeConnectionTypes.AiOutputParser}'>output parser</a> on the canvas to specify the output format you require`,
+				name: 'outputParserNotice',
+				type: 'notice',
+				default: '',
+				displayOptions: { show: { hasOutputParser: [true] } },
+			},
+			{
 				displayName: 'Working Directory',
 				name: 'cwd',
 				type: 'string',
@@ -80,12 +102,13 @@ export class AcpAgent implements INodeType {
 
 		for (let i = 0; i < items.length; i++) {
 			try {
+				const outputParser = await outputParserForItem(this, i);
 				const text = await runAcpPrompt(endpoint, {
-					prompt: promptForItem(this, items[i], i),
+					prompt: promptWithFormatInstructions(promptForItem(this, items[i], i), outputParser),
 					cwd: String(this.getNodeParameter('cwd', i)),
 					timeoutMs: Number(this.getNodeParameter('timeoutSeconds', i)) * 1000,
 				});
-				out.push({ json: { output: text }, pairedItem: { item: i } });
+				out.push({ json: await outputForText(text, outputParser), pairedItem: { item: i } });
 			} catch (error) {
 				if (!this.continueOnFail()) {
 					throw error;
@@ -118,6 +141,30 @@ interface JsonRpcMessage {
 	error?: { message?: string; code?: number; data?: unknown };
 }
 
+interface OutputParserLike {
+	parse(text: string): Promise<unknown>;
+	getFormatInstructions?(): string;
+}
+
+async function outputParserForItem(
+	ctx: IExecuteFunctions,
+	itemIndex: number,
+): Promise<OutputParserLike | undefined> {
+	const hasOutputParser = Boolean(ctx.getNodeParameter('hasOutputParser', itemIndex, false));
+	if (!hasOutputParser) {
+		return undefined;
+	}
+	const outputParser = await ctx.getInputConnectionData(NodeConnectionTypes.AiOutputParser, itemIndex);
+	if (!isOutputParser(outputParser)) {
+		throw new Error('Connected output parser did not supply a parser');
+	}
+	return outputParser;
+}
+
+function isOutputParser(value: unknown): value is OutputParserLike {
+	return isObject(value) && typeof value.parse === 'function';
+}
+
 function promptForItem(ctx: IExecuteFunctions, item: INodeExecutionData, itemIndex: number): string {
 	const promptType = String(ctx.getNodeParameter('promptType', itemIndex));
 	if (promptType === 'auto') {
@@ -128,6 +175,25 @@ function promptForItem(ctx: IExecuteFunctions, item: INodeExecutionData, itemInd
 		return chatInput;
 	}
 	return String(ctx.getNodeParameter('prompt', itemIndex));
+}
+
+function promptWithFormatInstructions(prompt: string, outputParser: OutputParserLike | undefined): string {
+	if (outputParser?.getFormatInstructions === undefined) {
+		return prompt;
+	}
+	const instructions = outputParser.getFormatInstructions();
+	if (instructions === '') {
+		return prompt;
+	}
+	return `${prompt}\n\n${instructions}`;
+}
+
+async function outputForText(text: string, outputParser: OutputParserLike | undefined): Promise<IDataObject> {
+	if (outputParser === undefined) {
+		return { output: text };
+	}
+	const parsed = await outputParser.parse(text);
+	return isObject(parsed) ? parsed : { output: parsed as IDataObject[string] };
 }
 
 function errorMessage(error: unknown): string {
