@@ -1,0 +1,75 @@
+{
+  "id": "acp-e2e-tool",
+  "name": "ACP E2E Tool",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "9cc2621f-6999-4485-9e1a-cdf26f79e943",
+      "name": "When clicking 'Execute workflow'",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "prompt": "CALL_TOOL",
+        "hasOutputParser": false,
+        "cwd": "/workspace",
+        "timeoutSeconds": 30
+      },
+      "id": "efee1794-e798-4453-95e8-2228f10ea30d",
+      "name": "ACP Agent",
+      "type": "CUSTOM.acpAgent",
+      "typeVersion": 1,
+      "position": [260, 0],
+      "credentials": {
+        "acpAgentApi": {
+          "id": "acp-agent-api-e2e",
+          "name": "ACP Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "description": "Return a deterministic e2e result",
+        "language": "javaScript",
+        "jsCode": "return `tool-ok:${query}`;",
+        "specifyInputSchema": false
+      },
+      "id": "ae1f16e9-0342-4303-b3fe-a040d2ca7f93",
+      "name": "Echo Tool",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1.3,
+      "position": [260, 200]
+    }
+  ],
+  "connections": {
+    "When clicking 'Execute workflow'": {
+      "main": [
+        [
+          {
+            "node": "ACP Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Echo Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "ACP Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

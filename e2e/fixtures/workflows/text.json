@@ -1,0 +1,51 @@
+{
+  "id": "acp-e2e-text",
+  "name": "ACP E2E Text",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a93289a2-4556-4a06-a209-f1d6739401c1",
+      "name": "When clicking 'Execute workflow'",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "prompt": "Respond with only \"hello, world!\"",
+        "hasOutputParser": false,
+        "cwd": "/workspace",
+        "timeoutSeconds": 30
+      },
+      "id": "4ef21bb4-0374-4f04-9d7f-94d24095b48f",
+      "name": "ACP Agent",
+      "type": "CUSTOM.acpAgent",
+      "typeVersion": 1,
+      "position": [260, 0],
+      "credentials": {
+        "acpAgentApi": {
+          "id": "acp-agent-api-e2e",
+          "name": "ACP Local"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "When clicking 'Execute workflow'": {
+      "main": [
+        [
+          {
+            "node": "ACP Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

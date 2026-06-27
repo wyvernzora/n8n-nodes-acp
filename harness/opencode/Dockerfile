@@ -22,8 +22,8 @@ RUN set -eux; \
 
 COPY harness/opencode/opencode.jsonc /etc/opencode/opencode.jsonc
 COPY harness/opencode/listen.sh /usr/local/bin/opencode-acp-listen
-COPY harness/opencode/acp-proxy.js /usr/local/bin/opencode-acp-proxy
-COPY harness/opencode/acp-mcp-stdio-bridge.js /usr/local/bin/acp-mcp-stdio-bridge
+COPY harness/runtime/acp-proxy.js /usr/local/bin/opencode-acp-proxy
+COPY harness/runtime/acp-mcp-stdio-bridge.js /usr/local/bin/acp-mcp-stdio-bridge
 RUN chmod 0755 /usr/local/bin/opencode-acp-listen /usr/local/bin/opencode-acp-proxy /usr/local/bin/acp-mcp-stdio-bridge
 
 USER 10001:10001

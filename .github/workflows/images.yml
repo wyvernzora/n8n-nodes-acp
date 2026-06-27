@@ -20,7 +20,7 @@ jobs:
         include:
           - component: node
             image: ghcr.io/wyvernzora/n8n-acp/node
-            file: images/node/Dockerfile
+            file: node/image/Dockerfile
             description: n8n ACP Agent custom node installer
           - component: harness-opencode
             image: ghcr.io/wyvernzora/n8n-acp/harness-opencode

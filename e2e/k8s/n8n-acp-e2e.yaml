@@ -1,0 +1,94 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: n8n-acp-e2e
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fake-acp-harness
+  namespace: n8n-acp-e2e
+data:
+  fake-acp-harness.js: |
+    // Placeholder populated by e2e/run-kind.sh.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: n8n-acp-e2e
+  namespace: n8n-acp-e2e
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: n8n-acp-e2e
+  template:
+    metadata:
+      labels:
+        app: n8n-acp-e2e
+    spec:
+      volumes:
+        - name: custom-nodes
+          emptyDir: {}
+        - name: fake-acp-harness
+          configMap:
+            name: fake-acp-harness
+            defaultMode: 0755
+      initContainers:
+        - name: install-node
+          image: n8n-acp-node:e2e
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: N8N_ACP_NODES_TARGET
+              value: /opt/n8n/custom
+          volumeMounts:
+            - name: custom-nodes
+              mountPath: /opt/n8n/custom
+      containers:
+        - name: n8n
+          image: n8nio/n8n:latest
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "trap : TERM INT; sleep infinity & wait"]
+          ports:
+            - containerPort: 5678
+          env:
+            - name: N8N_CUSTOM_EXTENSIONS
+              value: /opt/n8n/custom
+            - name: N8N_DIAGNOSTICS_ENABLED
+              value: "false"
+            - name: N8N_ENCRYPTION_KEY
+              value: n8n-acp-e2e-fixed-key
+            - name: N8N_SECURE_COOKIE
+              value: "false"
+            - name: N8N_TEMPLATES_ENABLED
+              value: "false"
+            - name: N8N_VERSION_NOTIFICATIONS_ENABLED
+              value: "false"
+          volumeMounts:
+            - name: custom-nodes
+              mountPath: /opt/n8n/custom
+        - name: fake-acp-harness
+          image: node:24-alpine
+          imagePullPolicy: IfNotPresent
+          command: ["node", "/e2e/fake-acp-harness.js"]
+          env:
+            - name: ACP_HOST
+              value: 127.0.0.1
+            - name: ACP_PORT
+              value: "8080"
+          volumeMounts:
+            - name: fake-acp-harness
+              mountPath: /e2e
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: n8n-acp-e2e
+  namespace: n8n-acp-e2e
+spec:
+  selector:
+    app: n8n-acp-e2e
+  ports:
+    - name: http
+      port: 5678
+      targetPort: 5678

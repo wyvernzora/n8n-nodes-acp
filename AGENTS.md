@@ -11,8 +11,11 @@ apply unless explicitly contradicted here.
 Canonical references:
 
 - [`README.md`](README.md) - terse public project description.
-- [`package.json`](package.json) - package metadata, n8n entrypoints, and scripts.
-- `src/` - live node and credential implementation.
+- [`package.json`](package.json) - private workspace scripts.
+- `node/package.json` - n8n package metadata and entrypoints.
+- `node/src/` - live node and credential implementation.
+- `harness/runtime/` - generic ACP proxy and MCP bridge scripts.
+- `harness/opencode/` - OpenCode sidecar image.
 
 `docs.private/` may contain local planning context. It is gitignored and must not be
 treated as public documentation or release contract.
@@ -44,15 +47,16 @@ treated as public documentation or release contract.
 
 - **Language:** TypeScript on Node 20.15+.
 - **Package manager:** pnpm via Corepack (`packageManager` in `package.json`).
-- **n8n package shape:** community node package with `dist/credentials/...` and
-  `dist/nodes/...` entrypoints declared in `package.json`.
+- **n8n package shape:** community node package in `node/` with
+  `dist/credentials/...` and `dist/nodes/...` entrypoints declared in
+  `node/package.json`.
 - **Runtime dependency:** `n8n-workflow` is a peer dependency. Do not add n8n
   itself as a bundled dependency.
 
 ### Package map
 
-- `src/credentials/AcpAgentApi.credentials.ts` - ACP endpoint credential.
-- `src/nodes/AcpAgent/AcpAgent.node.ts` - n8n node implementation.
+- `node/src/credentials/AcpAgentApi.credentials.ts` - ACP endpoint credential.
+- `node/src/nodes/AcpAgent/AcpAgent.node.ts` - n8n node implementation.
 
 ### Commands
 
@@ -94,7 +98,7 @@ Run `corepack pnpm hooks:install` once per checkout to enable lefthook.
   implementing JSON parsing/repair in this node.
 - Keep dependencies intentional and minimal. Use platform/n8n/stdlib behavior
   before adding a package.
-- Keep generated output out of git: `dist/`, `node_modules/`, coverage, local
+- Keep generated output out of git: `node/dist/`, `node_modules/`, coverage, local
   docs, and machine notes are ignored.
 - Commit messages must not mention Claude or Claude Code. `lefthook.yml`
   enforces this through `scripts/block-claude-commit-msg.sh`.

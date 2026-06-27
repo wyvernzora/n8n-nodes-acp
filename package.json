@@ -1,42 +1,20 @@
 {
-  "name": "n8n-nodes-acp",
+  "name": "n8n-acp",
   "version": "0.0.0",
-  "description": "n8n node for running prompts through ACP-enabled agent harnesses.",
-  "keywords": ["n8n-community-node-package", "acp", "agent"],
-  "license": "MIT",
+  "private": true,
   "packageManager": "pnpm@10.6.5",
-  "engines": {
-    "node": ">=20.15"
-  },
-  "main": "index.js",
-  "files": [
-    "dist"
-  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "dev": "tsc -p tsconfig.json --watch",
+    "build": "corepack pnpm -C node build",
+    "dev": "corepack pnpm -C node dev",
+    "e2e": "node e2e/self-check.js",
+    "e2e:docker": "e2e/run-docker.sh",
+    "e2e:kind": "e2e/run-kind.sh",
+    "e2e:self": "node e2e/self-check.js",
     "harness:docker:build": "docker build -f harness/opencode/Dockerfile -t ghcr.io/wyvernzora/n8n-acp/harness-opencode:dev .",
     "harness:smoke": "scripts/smoke-opencode-acp.sh",
     "hooks:install": "lefthook install",
     "lint": "git diff --check",
-    "node:docker:build": "docker build -f images/node/Dockerfile -t ghcr.io/wyvernzora/n8n-acp/node:dev .",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
-  },
-  "n8n": {
-    "n8nNodesApiVersion": 1,
-    "credentials": [
-      "dist/credentials/AcpAgentApi.credentials.js"
-    ],
-    "nodes": [
-      "dist/nodes/AcpAgent/AcpAgent.node.js"
-    ]
-  },
-  "peerDependencies": {
-    "n8n-workflow": "*"
-  },
-  "devDependencies": {
-    "@types/node": "^22.10.0",
-    "n8n-workflow": "*",
-    "typescript": "^5.7.2"
+    "node:docker:build": "docker build -f node/image/Dockerfile -t ghcr.io/wyvernzora/n8n-acp/node:dev .",
+    "typecheck": "corepack pnpm -C node typecheck"
   }
 }

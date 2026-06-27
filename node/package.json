@@ -1,0 +1,37 @@
+{
+  "name": "n8n-nodes-acp",
+  "version": "0.0.0",
+  "description": "n8n node for running prompts through ACP-enabled agent harnesses.",
+  "keywords": ["n8n-community-node-package", "acp", "agent"],
+  "license": "MIT",
+  "packageManager": "pnpm@10.6.5",
+  "engines": {
+    "node": ">=20.15"
+  },
+  "main": "index.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": [
+      "dist/credentials/AcpAgentApi.credentials.js"
+    ],
+    "nodes": [
+      "dist/nodes/AcpAgent/AcpAgent.node.js"
+    ]
+  },
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "n8n-workflow": "*",
+    "typescript": "^5.7.2"
+  }
+}

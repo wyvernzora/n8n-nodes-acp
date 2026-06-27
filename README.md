@@ -1,6 +1,13 @@
-# n8n Nodes ACP
+# n8n ACP
 
-n8n community node for running workflow items through ACP-compatible agent harnesses.
+n8n community node plus ACP harness sidecar pieces.
+
+## Layout
+
+- `node/` - `n8n-nodes-acp` package.
+- `harness/runtime/` - generic ACP proxy and MCP stdio bridge.
+- `harness/opencode/` - OpenCode sidecar image.
+- `e2e/` - cross-component smoke tests.
 
 ## Development
 

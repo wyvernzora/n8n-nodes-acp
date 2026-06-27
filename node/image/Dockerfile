@@ -7,17 +7,19 @@
 FROM node:24-alpine AS build
 WORKDIR /src
 RUN corepack enable
-COPY package.json pnpm-lock.yaml ./
-RUN corepack pnpm install --frozen-lockfile
-COPY tsconfig.json ./
-COPY src/ ./src/
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY node/package.json ./node/package.json
+RUN corepack pnpm install --frozen-lockfile --filter n8n-nodes-acp...
+WORKDIR /src/node
+COPY node/tsconfig.json ./
+COPY node/src/ ./src/
 RUN corepack pnpm build
 RUN mkdir -p /pkg && cp -r package.json dist /pkg/
 
 FROM busybox:1.37-musl
 LABEL org.opencontainers.image.source="https://github.com/wyvernzora/n8n-nodes-acp"
 COPY --from=build /pkg /n8n-nodes-acp
-COPY images/node/entrypoint.sh /entrypoint.sh
+COPY node/image/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENV N8N_ACP_NODES_TARGET=/opt/n8n/custom
 ENTRYPOINT ["/entrypoint.sh"]
