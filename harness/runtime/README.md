@@ -1,4 +1,13 @@
-# ACP Harness Runtime
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../../docs/assets/banner-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="../../docs/assets/banner-light.svg">
+    <img alt="ACP Harness Runtime" src="../../docs/assets/banner-light.svg" width="720">
+  </picture>
+  <h1>ACP Harness Runtime</h1>
+  <p><b>Bridge stdio ACP harnesses to TCP with MCP-over-ACP tool calls.</b></p>
+</div>
+<hr/>
 
 This is the Go runtime used by harness images that need to expose a stdio ACP
 agent over TCP for the n8n ACP Agent node.

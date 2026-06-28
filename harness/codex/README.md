@@ -1,4 +1,13 @@
-# Codex ACP Harness
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../../docs/assets/banner-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="../../docs/assets/banner-light.svg">
+    <img alt="Codex ACP Harness" src="../../docs/assets/banner-light.svg" width="720">
+  </picture>
+  <h1>Codex ACP Harness</h1>
+  <p><b>Expose Codex as a TCP ACP sidecar for n8n.</b></p>
+</div>
+<hr/>
 
 This image runs `@agentclientprotocol/codex-acp` behind the shared ACP harness
 runtime. It exposes Codex as a TCP ACP sidecar for the n8n ACP Agent node.

@@ -1,4 +1,13 @@
-# E2E Tests
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="../docs/assets/banner-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="../docs/assets/banner-light.svg">
+    <img alt="E2E Tests" src="../docs/assets/banner-light.svg" width="720">
+  </picture>
+  <h1>E2E Tests</h1>
+  <p><b>Deployable checks for the n8n ACP Agent stack.</b></p>
+</div>
+<hr/>
 
 This directory keeps the ACP side of the test stack deployable without pulling UI automation into the first pass.
 

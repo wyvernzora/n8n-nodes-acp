@@ -1,4 +1,13 @@
-# n8n ACP Agent Node
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/banner-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="./docs/assets/banner-light.svg">
+    <img alt="n8n ACP Agent Node" src="./docs/assets/banner-light.svg" width="720">
+  </picture>
+  <h1>n8n ACP Agent Node</h1>
+  <p><b>Run n8n workflow items through ACP-capable agent harnesses.</b></p>
+</div>
+<hr/>
 
 `n8n-nodes-acp` is an n8n community node that runs workflow items through an
 ACP-capable agent harness.
