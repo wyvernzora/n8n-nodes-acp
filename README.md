@@ -17,6 +17,7 @@ Screenshot placeholder: add an ACP Agent node screenshot here.
   `N8N_CUSTOM_EXTENSIONS`.
 - `harness/runtime/` - a Go ACP proxy runtime with MCP-over-ACP tool bridging.
 - `harness/opencode/` - an OpenCode harness sidecar image.
+- `harness/codex/` - a Codex ACP harness sidecar image.
 - `e2e/` - protocol, Docker, and kind smoke tests.
 
 ## How It Works
@@ -36,6 +37,7 @@ The GitHub Actions workflow publishes multi-arch images on pushes to `main`:
 
 - `ghcr.io/wyvernzora/n8n-acp/node:dev`
 - `ghcr.io/wyvernzora/n8n-acp/opencode:dev`
+- `ghcr.io/wyvernzora/n8n-acp/codex:dev`
 
 Each image also gets a `sha-*` tag for the source revision.
 
@@ -44,6 +46,7 @@ Build locally:
 ```sh
 make node-image
 make opencode-image
+make codex-image
 ```
 
 ## OpenCode Harness
@@ -53,6 +56,9 @@ n8n pod. It starts one long-lived `opencode acp` worker and exposes it on TCP.
 
 See [harness/opencode/README.md](harness/opencode/README.md) for Docker,
 Kubernetes, and provider sign-in instructions.
+
+See [harness/codex/README.md](harness/codex/README.md) for the Codex ACP
+harness image.
 
 ## Development
 

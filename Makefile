@@ -12,7 +12,7 @@ GOLANGCI_LINT ?= $(shell GOBIN=$$($(GO) env GOBIN 2>/dev/null); GOPATH=$$($(GO) 
 
 .PHONY: build typecheck lint test hooks-install \
 	node-install node-build node-typecheck node-dev node-image \
-	harness-build harness-lint harness-smoke opencode-image \
+	harness-build harness-lint harness-smoke opencode-image codex-image \
 	e2e e2e-self e2e-docker e2e-kind
 
 build: node-build harness-build
@@ -58,6 +58,9 @@ harness-smoke:
 
 opencode-image:
 	$(DOCKER) build -f harness/opencode/Dockerfile -t ghcr.io/wyvernzora/n8n-acp/opencode:dev .
+
+codex-image:
+	$(DOCKER) build -f harness/codex/Dockerfile -t ghcr.io/wyvernzora/n8n-acp/codex:dev .
 
 e2e: e2e-self
 
