@@ -34,6 +34,12 @@ docker run -d --name codex-acp \
   ghcr.io/wyvernzora/n8n-acp/codex:dev
 ```
 
+Sign in inside the running container with device auth:
+
+```sh
+docker exec -it codex-acp codex login --device-auth
+```
+
 Or run with an API key:
 
 ```sh
@@ -62,8 +68,16 @@ For browserless sidecar deployments, the image sets `NO_BROWSER=1` by default.
 Use mounted Codex state or API-key environment variables for auth:
 
 - mount Codex state at `/home/codex/.codex`
+- run `codex login --device-auth` inside the container
 - set `CODEX_API_KEY`
 - set `OPENAI_API_KEY` as the fallback API key
+
+Example device-auth sign-in:
+
+```sh
+kubectl exec -it <n8n-pod> -c <codex-container> -- \
+  codex login --device-auth
+```
 
 ## Environment
 
