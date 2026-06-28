@@ -59,6 +59,13 @@ async function main() {
 			cwd: '/workspace',
 			mcpServers: [{ type: 'acp', name: 'n8n-tools', id: 'tools-1' }],
 		});
+		assertConfigValue(session.configOptions, 'model', 'fake-fast');
+		const config = await client.request('session/set_config_option', {
+			sessionId: session.sessionId,
+			configId: 'model',
+			value: 'fake-smart',
+		});
+		assertConfigValue(config.configOptions, 'model', 'fake-smart');
 		await client.request('session/prompt', {
 			sessionId: session.sessionId,
 			prompt: [{ type: 'text', text: 'CALL_TOOL' }],
@@ -74,6 +81,11 @@ async function main() {
 			console.error(stderr.join(''));
 		}
 	}
+}
+
+function assertConfigValue(configOptions, id, value) {
+	const option = configOptions.find((candidate) => candidate.id === id);
+	assert.equal(option.currentValue, value);
 }
 
 async function freePort() {

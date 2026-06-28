@@ -61,8 +61,13 @@ class Connection {
 				};
 			} else if (message.method === 'session/new') {
 				const sessionId = randomUUID();
-				this.sessions.set(sessionId, { mcpServers: Array.isArray(params.mcpServers) ? params.mcpServers : [] });
-				result = { sessionId };
+				this.sessions.set(sessionId, {
+					config: { model: 'fake-fast', thought_level: 'low' },
+					mcpServers: Array.isArray(params.mcpServers) ? params.mcpServers : [],
+				});
+				result = { sessionId, configOptions: configOptions(this.sessions.get(sessionId).config) };
+			} else if (message.method === 'session/set_config_option') {
+				result = this.setConfigOption(params);
 			} else if (message.method === 'session/prompt') {
 				result = await this.prompt(params);
 			} else if (message.method === 'session/cancel') {
@@ -91,6 +96,15 @@ class Connection {
 
 		this.update(sessionId, 'hello, world!');
 		return {};
+	}
+
+	setConfigOption(params) {
+		const session = this.sessions.get(String(params.sessionId || ''));
+		if (session === undefined) throw new Error('unknown session');
+		if (!['model', 'thought_level'].includes(params.configId)) throw new Error('unknown config option');
+
+		session.config[params.configId] = String(params.value || '');
+		return { configOptions: configOptions(session.config) };
 	}
 
 	async callFirstTool(session) {
@@ -166,6 +180,33 @@ function toolText(result) {
 	const content = Array.isArray(result.content) ? result.content : [];
 	const firstText = content.find((part) => part && part.type === 'text' && typeof part.text === 'string');
 	return firstText ? firstText.text : JSON.stringify(result);
+}
+
+function configOptions(config) {
+	return [
+		{
+			id: 'model',
+			name: 'Model',
+			category: 'model',
+			type: 'select',
+			currentValue: config.model,
+			options: [
+				{ value: 'fake-fast', name: 'Fake Fast' },
+				{ value: 'fake-smart', name: 'Fake Smart' },
+			],
+		},
+		{
+			id: 'thought_level',
+			name: 'Reasoning Effort',
+			category: 'thought_level',
+			type: 'select',
+			currentValue: config.thought_level,
+			options: [
+				{ value: 'low', name: 'Low' },
+				{ value: 'high', name: 'High' },
+			],
+		},
+	];
 }
 
 function isObject(value) {

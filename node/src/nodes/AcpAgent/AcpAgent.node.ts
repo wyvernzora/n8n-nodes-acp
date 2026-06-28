@@ -1,7 +1,9 @@
 import type {
 	IDataObject,
 	IExecuteFunctions,
+	ILoadOptionsFunctions,
 	INodeExecutionData,
+	INodePropertyOptions,
 	INodeType,
 	INodeTypeDescription,
 } from 'n8n-workflow';
@@ -13,6 +15,8 @@ const CRED = 'acpAgentApi';
 const DEFAULT_ACP_PORT = 8080;
 const JSON_RPC_VERSION = '2.0';
 const ACP_VERSION = 1;
+const MODEL_CATEGORY = 'model';
+const REASONING_CATEGORY = 'thought_level';
 
 export class AcpAgent implements INodeType {
 	description: INodeTypeDescription = {
@@ -22,6 +26,8 @@ export class AcpAgent implements INodeType {
 		version: 1,
 		description: 'Run workflow data through an ACP-enabled agent harness',
 		defaults: { name: 'ACP Agent' },
+		icon: 'node:ai-agent' as unknown as INodeTypeDescription['icon'],
+		iconColor: 'black',
 		codex: {
 			categories: ['AI'],
 			subcategories: {
@@ -72,6 +78,22 @@ export class AcpAgent implements INodeType {
 				displayOptions: { show: { promptType: ['define'] } },
 			},
 			{
+				displayName: 'Model',
+				name: 'model',
+				type: 'options',
+				default: '',
+				typeOptions: { loadOptionsMethod: 'getModelOptions', loadOptionsDependsOn: ['cwd'] },
+				description: 'Model options advertised by the ACP harness for a new session',
+			},
+			{
+				displayName: 'Reasoning Effort',
+				name: 'reasoningEffort',
+				type: 'options',
+				default: '',
+				typeOptions: { loadOptionsMethod: 'getReasoningEffortOptions', loadOptionsDependsOn: ['cwd'] },
+				description: 'Reasoning options advertised by the ACP harness for a new session',
+			},
+			{
 				displayName: 'Require Specific Output Format',
 				name: 'hasOutputParser',
 				type: 'boolean',
@@ -104,6 +126,18 @@ export class AcpAgent implements INodeType {
 		],
 	};
 
+	methods = {
+		loadOptions: {
+			async getModelOptions(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				return await configOptionsForCategory(this, MODEL_CATEGORY, 'model selection');
+			},
+
+			async getReasoningEffortOptions(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				return await configOptionsForCategory(this, REASONING_CATEGORY, 'reasoning effort selection');
+			},
+		},
+	};
+
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const credentials = await this.getCredentials(CRED);
 		const endpoint = parseAcpEndpoint(String(credentials.baseUrl));
@@ -119,6 +153,7 @@ export class AcpAgent implements INodeType {
 					cwd: String(this.getNodeParameter('cwd', i)),
 					timeoutMs: Number(this.getNodeParameter('timeoutSeconds', i)) * 1000,
 					tools,
+					config: configValuesForItem(this, i),
 				});
 				out.push({ json: await outputForText(text, outputParser), pairedItem: { item: i } });
 			} catch (error) {
@@ -143,6 +178,7 @@ interface AcpPrompt {
 	cwd: string;
 	timeoutMs: number;
 	tools: AcpTool[];
+	config: AcpConfigSelection[];
 }
 
 interface JsonRpcMessage {
@@ -166,6 +202,58 @@ interface AcpTool {
 	invoke?: (input: unknown) => Promise<unknown>;
 	call?: (input: unknown) => Promise<unknown>;
 	func?: (input: unknown) => Promise<unknown>;
+}
+
+interface AcpConfigSelection {
+	category: string;
+	value: string;
+}
+
+interface AcpConfigOption {
+	id: string;
+	name: string;
+	category?: string;
+	type: string;
+	currentValue: string;
+	options: AcpConfigOptionValue[];
+}
+
+interface AcpConfigOptionValue {
+	value: string;
+	name: string;
+	description?: string;
+}
+
+async function configOptionsForCategory(
+	ctx: ILoadOptionsFunctions,
+	category: string,
+	label: string,
+): Promise<INodePropertyOptions[]> {
+	const credentials = await ctx.getCredentials(CRED);
+	const endpoint = parseAcpEndpoint(String(credentials.baseUrl));
+	const cwd = String(ctx.getCurrentNodeParameter('cwd') ?? '/workspace');
+	const options = await probeConfigOptions(endpoint, cwd);
+	const option = configOptionForCategory(options, category);
+
+	if (option === undefined) {
+		return [{ name: `Harness does not support ${label}`, value: '' }];
+	}
+
+	return [
+		{ name: `Harness Default (${option.currentValue})`, value: '' },
+		...option.options.map((value) => ({
+			name: value.name,
+			value: value.value,
+			description: value.description,
+		})),
+	];
+}
+
+function configValuesForItem(ctx: IExecuteFunctions, itemIndex: number): AcpConfigSelection[] {
+	return [
+		{ category: MODEL_CATEGORY, value: String(ctx.getNodeParameter('model', itemIndex, '')) },
+		{ category: REASONING_CATEGORY, value: String(ctx.getNodeParameter('reasoningEffort', itemIndex, '')) },
+	].filter((selection) => selection.value !== '');
 }
 
 async function outputParserForItem(
@@ -280,14 +368,7 @@ async function runAcpPrompt(endpoint: AcpEndpoint, input: AcpPrompt): Promise<st
 	const client = await AcpConnection.connect(endpoint, input.timeoutMs);
 	try {
 		const toolset = input.tools.length > 0 ? installToolset(client, input.tools) : undefined;
-		await client.request('initialize', {
-			protocolVersion: ACP_VERSION,
-			clientCapabilities: {},
-			clientInfo: {
-				name: 'n8n-nodes-acp',
-				version: '0.0.0',
-			},
-		});
+		await initializeAcp(client);
 		const session = await client.request('session/new', {
 			cwd: input.cwd,
 			mcpServers:
@@ -305,6 +386,7 @@ async function runAcpPrompt(endpoint: AcpEndpoint, input: AcpPrompt): Promise<st
 		if (sessionId === '') {
 			throw new Error('ACP agent did not return a sessionId');
 		}
+		await applyConfigSelections(client, sessionId, configOptionsFromSession(session), input.config);
 
 		const text: string[] = [];
 		client.onMessage((message) => {
@@ -322,6 +404,93 @@ async function runAcpPrompt(endpoint: AcpEndpoint, input: AcpPrompt): Promise<st
 	} finally {
 		client.close();
 	}
+}
+
+async function probeConfigOptions(endpoint: AcpEndpoint, cwd: string): Promise<AcpConfigOption[]> {
+	const client = await AcpConnection.connect(endpoint, 10_000);
+	try {
+		await initializeAcp(client);
+		const session = await client.request('session/new', { cwd, mcpServers: [] });
+		return configOptionsFromSession(session);
+	} finally {
+		client.close();
+	}
+}
+
+async function initializeAcp(client: AcpConnection): Promise<void> {
+	await client.request('initialize', {
+		protocolVersion: ACP_VERSION,
+		clientCapabilities: {},
+		clientInfo: {
+			name: 'n8n-nodes-acp',
+			version: '0.0.0',
+		},
+	});
+}
+
+async function applyConfigSelections(
+	client: AcpConnection,
+	sessionId: string,
+	options: AcpConfigOption[],
+	selections: AcpConfigSelection[],
+): Promise<void> {
+	let currentOptions = options;
+
+	for (const selection of selections) {
+		const option = configOptionForCategory(currentOptions, selection.category);
+		if (option === undefined) {
+			continue;
+		}
+		const result = await client.request('session/set_config_option', {
+			sessionId,
+			configId: option.id,
+			value: selection.value,
+		});
+		currentOptions = configOptionsFromSession(result);
+	}
+}
+
+function configOptionsFromSession(session: IDataObject): AcpConfigOption[] {
+	return Array.isArray(session.configOptions) ? session.configOptions.flatMap(configOptionFromUnknown) : [];
+}
+
+function configOptionFromUnknown(value: unknown): AcpConfigOption[] {
+	if (!isObject(value) || typeof value.id !== 'string' || typeof value.name !== 'string' || value.type !== 'select' || !Array.isArray(value.options)) {
+		return [];
+	}
+
+	const options = value.options.flatMap(configOptionValueFromUnknown);
+	if (options.length === 0) {
+		return [];
+	}
+
+	return [
+		{
+			id: value.id,
+			name: value.name,
+			category: typeof value.category === 'string' ? value.category : undefined,
+			type: 'select',
+			currentValue: typeof value.currentValue === 'string' ? value.currentValue : options[0].value,
+			options,
+		},
+	];
+}
+
+function configOptionValueFromUnknown(value: unknown): AcpConfigOptionValue[] {
+	if (!isObject(value) || typeof value.value !== 'string') {
+		return [];
+	}
+	return [
+		{
+			value: value.value,
+			name: typeof value.name === 'string' ? value.name : value.value,
+			description: typeof value.description === 'string' ? value.description : undefined,
+		},
+	];
+}
+
+function configOptionForCategory(options: AcpConfigOption[], category: string): AcpConfigOption | undefined {
+	return options.find((option) => option.category === category);
 }
 
 interface Toolset {
