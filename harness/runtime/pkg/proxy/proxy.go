@@ -45,8 +45,8 @@ func ConfigFromEnv() Config {
 	return cfg
 }
 
-// Run listens for ACP TCP connections and starts one stdio ACP worker per
-// connection.
+// Run listens for ACP TCP connections and multiplexes them through one stdio
+// ACP worker.
 func Run(ctx context.Context, cfg Config) error {
 	return internalproxy.Run(ctx, internalproxy.Config{
 		Host:          cfg.Host,

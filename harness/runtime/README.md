@@ -12,7 +12,7 @@ app server instead of assuming Codex is an ACP server.
 
 The proxy has two modes:
 
-- default: listen for TCP ACP connections and proxy each one to a harness stdio
-  ACP process
+- default: listen for TCP ACP connections and multiplex them through one
+  long-lived harness stdio ACP process
 - `bridge`: expose a per-session stdio MCP server that tunnels tool calls back
-  over the active ACP connection
+  over the owning ACP client connection

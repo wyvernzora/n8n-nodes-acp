@@ -14,12 +14,12 @@ docker run --rm \
 Defaults:
 
 - listens on `127.0.0.1:8080`
-- runs `opencode acp` per TCP connection
+- starts one long-lived `opencode acp` process for the sidecar lifetime
 - enables only the OpenAI provider
 - uses `openai/gpt-5.1-codex` by default
 - uses `openai/gpt-5.1-codex-mini` for OpenCode's small-model tasks
 - expects OpenAI credentials to be configured with `opencode providers login`
-- rewrites ACP `mcpServers` into per-connection stdio MCP bridges for OpenCode
+- rewrites ACP `mcpServers` into stdio MCP bridges routed by ACP session/tool IDs
 - sets OpenCode permissions to `allow`
 - disables builtin OpenCode tools in `opencode.jsonc`
 

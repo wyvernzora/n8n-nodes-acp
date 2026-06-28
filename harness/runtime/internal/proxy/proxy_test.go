@@ -3,6 +3,7 @@ package proxy
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"strings"
 	"testing"
 )
@@ -39,6 +40,44 @@ func TestRewriteSessionNewReplacesACPServer(t *testing.T) {
 		if server.Args[i] != wantArgs[i] {
 			t.Fatalf("args = %#v, want %#v", server.Args, wantArgs)
 		}
+	}
+}
+
+func TestProxyTracksSessionAndMCPOwners(t *testing.T) {
+	proxy := &workerProxy{
+		clients:       map[string]*clientConn{},
+		pendingWorker: map[string]forwardedRequest{},
+		sessionOwners: map[string]string{},
+		toolOwners:    map[string]string{},
+		mcpOwners:     map[string]string{},
+	}
+	server, clientSide := net.Pipe()
+	defer server.Close()
+	defer clientSide.Close()
+	go scanLines(clientSide, func([]byte) error { return nil })
+	client := &clientConn{id: "client-1", conn: server}
+
+	proxy.recordToolOwners(client, json.RawMessage(`{"mcpServers":[{"type":"acp","id":"tools-1"},{"type":"stdio","id":"local"}]}`))
+	if proxy.toolOwners["tools-1"] != client.id {
+		t.Fatalf("tool owner = %q, want %q", proxy.toolOwners["tools-1"], client.id)
+	}
+	if _, ok := proxy.toolOwners["local"]; ok {
+		t.Fatal("stdio server should not be tracked as acp tool owner")
+	}
+
+	workerID := json.RawMessage(`"worker-1"`)
+	clientID := json.RawMessage(`1`)
+	proxy.pendingWorker[idKey(workerID)] = forwardedRequest{
+		client:     client,
+		originalID: clientID,
+		method:     "session/new",
+	}
+	proxy.routeWorkerResponse([]byte(`{"jsonrpc":"2.0","id":"worker-1","result":{"sessionId":"session-1"}}`), rpcMessage{
+		ID:     workerID,
+		Result: json.RawMessage(`{"sessionId":"session-1"}`),
+	})
+	if proxy.sessionOwners["session-1"] != client.id {
+		t.Fatalf("session owner = %q, want %q", proxy.sessionOwners["session-1"], client.id)
 	}
 }
 
