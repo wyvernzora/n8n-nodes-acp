@@ -163,7 +163,7 @@ export class AcpAgent implements INodeType {
 				const outputParser = await outputParserForItem(this, i);
 				const tools = await connectedTools(this);
 				const text = await runAcpPrompt(endpoint, {
-					prompt: promptWithFormatInstructions(promptForItem(this, items[i], i), outputParser),
+					prompt: promptWithToolInstructions(promptWithFormatInstructions(promptForItem(this, items[i], i), outputParser), tools),
 					cwd: optionString(this, i, 'cwd', DEFAULT_CWD),
 					timeoutMs: optionNumber(this, i, 'timeoutSeconds', DEFAULT_TIMEOUT_SECONDS) * 1000,
 					tools,
@@ -362,6 +362,14 @@ function promptWithFormatInstructions(prompt: string, outputParser: OutputParser
 	return `${prompt}\n\n${instructions}`;
 }
 
+function promptWithToolInstructions(prompt: string, tools: AcpTool[]): string {
+	if (tools.length === 0) {
+		return prompt;
+	}
+	const names = tools.map((tool) => `- ${tool.name}`).join('\n');
+	return `Available n8n MCP tools are on server n8n-tools. Use these exact tool names:\n${names}\n\n${prompt}`;
+}
+
 async function outputForText(text: string, outputParser: OutputParserLike | undefined): Promise<IDataObject> {
 	if (outputParser === undefined) {
 		return { output: text };
@@ -489,14 +497,18 @@ function endpointKey(endpoint: AcpEndpoint): string {
 }
 
 async function initializeAcp(client: AcpConnection): Promise<void> {
-	await client.request('initialize', {
-		protocolVersion: ACP_VERSION,
-		clientCapabilities: {},
-		clientInfo: {
-			name: 'n8n-nodes-acp',
-			version: '0.0.0',
-		},
-	});
+	try {
+		await client.request('initialize', {
+			protocolVersion: ACP_VERSION,
+			clientCapabilities: {},
+			clientInfo: {
+				name: 'n8n-nodes-acp',
+				version: '0.0.0',
+			},
+		});
+	} catch {
+		// Some ACP adapters reject initialize but still accept session requests.
+	}
 }
 
 async function applyConfigSelections(
@@ -931,7 +943,7 @@ class AcpConnection {
 			if (pending !== undefined) {
 				this.pending.delete(message.id);
 				if (message.error !== undefined) {
-					pending.reject(new Error(message.error.message ?? `ACP error ${message.error.code ?? ''}`));
+					pending.reject(new Error(rpcErrorMessage(message.error)));
 				} else {
 					pending.resolve(isObject(message.result) ? message.result : {});
 				}
@@ -990,6 +1002,18 @@ class AcpConnection {
 		}
 		this.pending.clear();
 	}
+}
+
+function rpcErrorMessage(error: JsonRpcMessage['error']): string {
+	if (error === undefined) {
+		return 'ACP error';
+	}
+	const message = error.message ?? `ACP error ${error.code ?? ''}`;
+	const code = error.code === undefined ? '' : ` (${error.code})`;
+	if (error.data === undefined) {
+		return `${message}${code}`;
+	}
+	return `${message}${code}: ${textForToolResult(error.data)}`;
 }
 
 class RpcError extends Error {
