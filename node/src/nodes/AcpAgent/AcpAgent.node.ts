@@ -17,6 +17,12 @@ const JSON_RPC_VERSION = '2.0';
 const ACP_VERSION = 1;
 const MODEL_CATEGORY = 'model';
 const REASONING_CATEGORY = 'thought_level';
+const DEFAULT_CWD = '/workspace';
+const DEFAULT_TIMEOUT_SECONDS = 120;
+const CONFIG_OPTIONS_CACHE_MS = 60_000;
+
+const configOptionsCache = new Map<string, { expiresAt: number; promise: Promise<AcpConfigOption[]> }>();
+const sharedConnections = new Map<string, Promise<AcpConnection>>();
 
 export class AcpAgent implements INodeType {
 	description: INodeTypeDescription = {
@@ -82,7 +88,7 @@ export class AcpAgent implements INodeType {
 				name: 'model',
 				type: 'options',
 				default: '',
-				typeOptions: { loadOptionsMethod: 'getModelOptions', loadOptionsDependsOn: ['cwd'] },
+				typeOptions: { loadOptionsMethod: 'getModelOptions' },
 				description: 'Model options advertised by the ACP harness for a new session',
 			},
 			{
@@ -90,7 +96,7 @@ export class AcpAgent implements INodeType {
 				name: 'reasoningEffort',
 				type: 'options',
 				default: '',
-				typeOptions: { loadOptionsMethod: 'getReasoningEffortOptions', loadOptionsDependsOn: ['cwd'] },
+				typeOptions: { loadOptionsMethod: 'getReasoningEffortOptions' },
 				description: 'Reasoning options advertised by the ACP harness for a new session',
 			},
 			{
@@ -108,20 +114,28 @@ export class AcpAgent implements INodeType {
 				displayOptions: { show: { hasOutputParser: [true] } },
 			},
 			{
-				displayName: 'Working Directory',
-				name: 'cwd',
-				type: 'string',
-				default: '/workspace',
-				required: true,
-				description: 'Absolute working directory for the ACP session',
-			},
-			{
-				displayName: 'Timeout Seconds',
-				name: 'timeoutSeconds',
-				type: 'number',
-				typeOptions: { minValue: 1 },
-				default: 120,
-				description: 'Maximum time the runner should spend on one item',
+				displayName: 'Options',
+				name: 'options',
+				type: 'collection',
+				placeholder: 'Add option',
+				default: {},
+				options: [
+					{
+						displayName: 'Timeout Seconds',
+						name: 'timeoutSeconds',
+						type: 'number',
+						typeOptions: { minValue: 1 },
+						default: DEFAULT_TIMEOUT_SECONDS,
+						description: 'Maximum time the runner should spend on one item',
+					},
+					{
+						displayName: 'Working Directory',
+						name: 'cwd',
+						type: 'string',
+						default: DEFAULT_CWD,
+						description: 'Absolute working directory for the ACP session',
+					},
+				],
 			},
 		],
 	};
@@ -150,8 +164,8 @@ export class AcpAgent implements INodeType {
 				const tools = await connectedTools(this);
 				const text = await runAcpPrompt(endpoint, {
 					prompt: promptWithFormatInstructions(promptForItem(this, items[i], i), outputParser),
-					cwd: String(this.getNodeParameter('cwd', i)),
-					timeoutMs: Number(this.getNodeParameter('timeoutSeconds', i)) * 1000,
+					cwd: optionString(this, i, 'cwd', DEFAULT_CWD),
+					timeoutMs: optionNumber(this, i, 'timeoutSeconds', DEFAULT_TIMEOUT_SECONDS) * 1000,
 					tools,
 					config: configValuesForItem(this, i),
 				});
@@ -231,8 +245,7 @@ async function configOptionsForCategory(
 ): Promise<INodePropertyOptions[]> {
 	const credentials = await ctx.getCredentials(CRED);
 	const endpoint = parseAcpEndpoint(String(credentials.baseUrl));
-	const cwd = String(ctx.getCurrentNodeParameter('cwd') ?? '/workspace');
-	const options = await probeConfigOptions(endpoint, cwd);
+	const options = await cachedConfigOptions(endpoint);
 	const option = configOptionForCategory(options, category);
 
 	if (option === undefined) {
@@ -254,6 +267,18 @@ function configValuesForItem(ctx: IExecuteFunctions, itemIndex: number): AcpConf
 		{ category: MODEL_CATEGORY, value: String(ctx.getNodeParameter('model', itemIndex, '')) },
 		{ category: REASONING_CATEGORY, value: String(ctx.getNodeParameter('reasoningEffort', itemIndex, '')) },
 	].filter((selection) => selection.value !== '');
+}
+
+function optionString(ctx: IExecuteFunctions, itemIndex: number, key: string, fallback: string): string {
+	const options = ctx.getNodeParameter('options', itemIndex, {}) as IDataObject;
+	const value = options[key] ?? ctx.getNodeParameter(key, itemIndex, fallback);
+	return typeof value === 'string' && value !== '' ? value : fallback;
+}
+
+function optionNumber(ctx: IExecuteFunctions, itemIndex: number, key: string, fallback: number): number {
+	const options = ctx.getNodeParameter('options', itemIndex, {}) as IDataObject;
+	const value = Number(options[key] ?? ctx.getNodeParameter(key, itemIndex, fallback));
+	return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 async function outputParserForItem(
@@ -365,10 +390,10 @@ function parseAcpEndpoint(rawUrl: string): AcpEndpoint {
 }
 
 async function runAcpPrompt(endpoint: AcpEndpoint, input: AcpPrompt): Promise<string> {
-	const client = await AcpConnection.connect(endpoint, input.timeoutMs);
+	const client = await sharedAcpConnection(endpoint);
+	const toolset = input.tools.length > 0 ? client.addToolset(input.tools) : undefined;
+	let unsubscribe: (() => void) | undefined;
 	try {
-		const toolset = input.tools.length > 0 ? installToolset(client, input.tools) : undefined;
-		await initializeAcp(client);
 		const session = await client.request('session/new', {
 			cwd: input.cwd,
 			mcpServers:
@@ -389,7 +414,7 @@ async function runAcpPrompt(endpoint: AcpEndpoint, input: AcpPrompt): Promise<st
 		await applyConfigSelections(client, sessionId, configOptionsFromSession(session), input.config);
 
 		const text: string[] = [];
-		client.onMessage((message) => {
+		unsubscribe = client.onMessage((message) => {
 			const chunk = agentTextChunk(message, sessionId);
 			if (chunk !== undefined) {
 				text.push(chunk);
@@ -399,22 +424,68 @@ async function runAcpPrompt(endpoint: AcpEndpoint, input: AcpPrompt): Promise<st
 		await client.request('session/prompt', {
 			sessionId,
 			prompt: [{ type: 'text', text: input.prompt }],
-		});
+		}, input.timeoutMs);
 		return text.join('');
 	} finally {
-		client.close();
+		unsubscribe?.();
+		if (toolset !== undefined) {
+			client.removeToolset(toolset.id);
+		}
 	}
 }
 
 async function probeConfigOptions(endpoint: AcpEndpoint, cwd: string): Promise<AcpConfigOption[]> {
-	const client = await AcpConnection.connect(endpoint, 10_000);
-	try {
-		await initializeAcp(client);
-		const session = await client.request('session/new', { cwd, mcpServers: [] });
-		return configOptionsFromSession(session);
-	} finally {
-		client.close();
+	const client = await sharedAcpConnection(endpoint);
+	const session = await client.request('session/new', { cwd, mcpServers: [] }, 10_000);
+	return configOptionsFromSession(session);
+}
+
+function cachedConfigOptions(endpoint: AcpEndpoint): Promise<AcpConfigOption[]> {
+	const key = endpointKey(endpoint);
+	const cached = configOptionsCache.get(key);
+	if (cached !== undefined && cached.expiresAt > Date.now()) {
+		return cached.promise;
 	}
+
+	const promise = probeConfigOptions(endpoint, DEFAULT_CWD).catch((error) => {
+		configOptionsCache.delete(key);
+		throw error;
+	});
+	configOptionsCache.set(key, { expiresAt: Date.now() + CONFIG_OPTIONS_CACHE_MS, promise });
+	return promise;
+}
+
+async function sharedAcpConnection(endpoint: AcpEndpoint): Promise<AcpConnection> {
+	const key = endpointKey(endpoint);
+	const existing = sharedConnections.get(key);
+	if (existing !== undefined) {
+		return await existing;
+	}
+
+	const promise = AcpConnection.connect(endpoint, 10_000)
+		.then(async (client) => {
+			client.onClose(() => {
+				if (sharedConnections.get(key) === promise) {
+					sharedConnections.delete(key);
+					configOptionsCache.delete(key);
+				}
+			});
+			await initializeAcp(client);
+			return client;
+		})
+		.catch((error) => {
+			if (sharedConnections.get(key) === promise) {
+				sharedConnections.delete(key);
+				configOptionsCache.delete(key);
+			}
+			throw error;
+		});
+	sharedConnections.set(key, promise);
+	return await promise;
+}
+
+function endpointKey(endpoint: AcpEndpoint): string {
+	return `${endpoint.host}:${endpoint.port}`;
 }
 
 async function initializeAcp(client: AcpConnection): Promise<void> {
@@ -497,44 +568,6 @@ interface Toolset {
 	id: string;
 	tools: AcpTool[];
 	connections: Map<string, string>;
-}
-
-function installToolset(client: AcpConnection, tools: AcpTool[]): Toolset {
-	const toolset = { id: randomUUID(), tools, connections: new Map<string, string>() };
-
-	client.onRequest('mcp/connect', (params) => {
-		if (params.acpId !== toolset.id) {
-			throw new RpcError(-32602, 'Unknown MCP server id');
-		}
-		const connectionId = randomUUID();
-		toolset.connections.set(connectionId, toolset.id);
-		return { connectionId };
-	});
-
-	client.onRequest('mcp/message', async (params) => {
-		const connectionId = typeof params.connectionId === 'string' ? params.connectionId : '';
-		if (!toolset.connections.has(connectionId)) {
-			throw new RpcError(-32602, 'Unknown MCP connection id');
-		}
-		const method = typeof params.method === 'string' ? params.method : '';
-		const innerParams = isObject(params.params) ? params.params : {};
-
-		if (method === 'tools/list') {
-			return { tools: toolset.tools.map(toolDescription) };
-		}
-		if (method === 'tools/call') {
-			return await callTool(toolset.tools, innerParams);
-		}
-		throw new RpcError(-32601, `Unknown MCP method: ${method}`);
-	});
-
-	client.onRequest('mcp/disconnect', (params) => {
-		const connectionId = typeof params.connectionId === 'string' ? params.connectionId : '';
-		toolset.connections.delete(connectionId);
-		return {};
-	});
-
-	return toolset;
 }
 
 function toolDescription(tool: AcpTool): IDataObject {
@@ -685,7 +718,9 @@ class AcpConnection {
 	>();
 
 	private readonly listeners: Array<(message: JsonRpcMessage) => void> = [];
+	private readonly closeListeners: Array<() => void> = [];
 	private readonly requestHandlers = new Map<string, (params: IDataObject) => Promise<unknown> | unknown>();
+	private readonly toolsets = new Map<string, Toolset>();
 	private buffer = '';
 	private nextId = 1;
 	private closed = false;
@@ -696,7 +731,14 @@ class AcpConnection {
 	) {
 		socket.on('data', (chunk) => this.read(chunk));
 		socket.on('error', (error) => this.failAll(error));
-		socket.on('close', () => this.failAll(new Error('ACP connection closed')));
+		socket.on('close', () => {
+			this.closed = true;
+			this.failAll(new Error('ACP connection closed'));
+			for (const listener of this.closeListeners) {
+				listener();
+			}
+		});
+		this.installMcpHandlers();
 	}
 
 	static connect(endpoint: AcpEndpoint, timeoutMs: number): Promise<AcpConnection> {
@@ -718,15 +760,19 @@ class AcpConnection {
 		});
 	}
 
-	request(method: string, params: IDataObject): Promise<IDataObject> {
+	request(method: string, params: IDataObject, timeoutMs = this.timeoutMs): Promise<IDataObject> {
 		const id = this.nextId++;
 		const message = { jsonrpc: JSON_RPC_VERSION, id, method, params };
 
 		return new Promise((resolve, reject) => {
+			if (this.closed) {
+				reject(new Error('ACP connection closed'));
+				return;
+			}
 			const timer = setTimeout(() => {
 				this.pending.delete(id);
 				reject(new Error(`ACP request timed out: ${method}`));
-			}, this.timeoutMs);
+			}, timeoutMs);
 
 			this.pending.set(id, {
 				resolve: (value) => {
@@ -742,17 +788,83 @@ class AcpConnection {
 		});
 	}
 
-	onMessage(listener: (message: JsonRpcMessage) => void): void {
+	onMessage(listener: (message: JsonRpcMessage) => void): () => void {
 		this.listeners.push(listener);
+		return () => {
+			const index = this.listeners.indexOf(listener);
+			if (index !== -1) {
+				this.listeners.splice(index, 1);
+			}
+		};
 	}
 
 	onRequest(method: string, handler: (params: IDataObject) => Promise<unknown> | unknown): void {
 		this.requestHandlers.set(method, handler);
 	}
 
+	onClose(listener: () => void): void {
+		this.closeListeners.push(listener);
+	}
+
+	addToolset(tools: AcpTool[]): Toolset {
+		const toolset = { id: randomUUID(), tools, connections: new Map<string, string>() };
+		this.toolsets.set(toolset.id, toolset);
+		return toolset;
+	}
+
+	removeToolset(id: string): void {
+		this.toolsets.delete(id);
+	}
+
 	close(): void {
 		this.closed = true;
 		this.socket.end();
+	}
+
+	private installMcpHandlers(): void {
+		this.onRequest('mcp/connect', (params) => {
+			const acpID = typeof params.acpId === 'string' ? params.acpId : '';
+			const toolset = this.toolsets.get(acpID);
+			if (toolset === undefined) {
+				throw new RpcError(-32602, 'Unknown MCP server id');
+			}
+			const connectionId = randomUUID();
+			toolset.connections.set(connectionId, toolset.id);
+			return { connectionId };
+		});
+
+		this.onRequest('mcp/message', async (params) => {
+			const connectionId = typeof params.connectionId === 'string' ? params.connectionId : '';
+			const toolset = this.toolsetForConnection(connectionId);
+			if (toolset === undefined) {
+				throw new RpcError(-32602, 'Unknown MCP connection id');
+			}
+			const method = typeof params.method === 'string' ? params.method : '';
+			const innerParams = isObject(params.params) ? params.params : {};
+
+			if (method === 'tools/list') {
+				return { tools: toolset.tools.map(toolDescription) };
+			}
+			if (method === 'tools/call') {
+				return await callTool(toolset.tools, innerParams);
+			}
+			throw new RpcError(-32601, `Unknown MCP method: ${method}`);
+		});
+
+		this.onRequest('mcp/disconnect', (params) => {
+			const connectionId = typeof params.connectionId === 'string' ? params.connectionId : '';
+			this.toolsetForConnection(connectionId)?.connections.delete(connectionId);
+			return {};
+		});
+	}
+
+	private toolsetForConnection(connectionId: string): Toolset | undefined {
+		for (const toolset of this.toolsets.values()) {
+			if (toolset.connections.has(connectionId)) {
+				return toolset;
+			}
+		}
+		return undefined;
 	}
 
 	private read(chunk: Buffer): void {
@@ -841,9 +953,6 @@ class AcpConnection {
 	}
 
 	private failAll(error: Error): void {
-		if (this.closed) {
-			return;
-		}
 		for (const pending of this.pending.values()) {
 			pending.reject(error);
 		}
