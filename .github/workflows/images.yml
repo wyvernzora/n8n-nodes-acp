@@ -22,8 +22,8 @@ jobs:
             image: ghcr.io/wyvernzora/n8n-acp/node
             file: node/image/Dockerfile
             description: n8n ACP Agent custom node installer
-          - component: harness-opencode
-            image: ghcr.io/wyvernzora/n8n-acp/harness-opencode
+          - component: opencode
+            image: ghcr.io/wyvernzora/n8n-acp/opencode
             file: harness/opencode/Dockerfile
             description: OpenCode ACP harness sidecar
     steps:

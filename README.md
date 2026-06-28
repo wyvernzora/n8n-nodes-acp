@@ -35,7 +35,7 @@ harness runs as an n8n sidecar.
 The GitHub Actions workflow publishes multi-arch images on pushes to `main`:
 
 - `ghcr.io/wyvernzora/n8n-acp/node:dev`
-- `ghcr.io/wyvernzora/n8n-acp/harness-opencode:dev`
+- `ghcr.io/wyvernzora/n8n-acp/opencode:dev`
 
 Each image also gets a `sha-*` tag for the source revision.
 
@@ -43,7 +43,7 @@ Build locally:
 
 ```sh
 make node-image
-make harness-opencode-image
+make opencode-image
 ```
 
 ## OpenCode Harness

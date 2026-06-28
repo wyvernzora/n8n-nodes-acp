@@ -12,14 +12,14 @@ container during development.
 Published image:
 
 ```sh
-ghcr.io/wyvernzora/n8n-acp/harness-opencode:dev
+ghcr.io/wyvernzora/n8n-acp/opencode:dev
 ```
 
 Build locally:
 
 ```sh
 docker build -f harness/opencode/Dockerfile \
-  -t ghcr.io/wyvernzora/n8n-acp/harness-opencode:dev .
+  -t ghcr.io/wyvernzora/n8n-acp/opencode:dev .
 ```
 
 ## Docker
@@ -32,7 +32,7 @@ docker run -d --name opencode-acp \
   -p 127.0.0.1:8080:8080 \
   -v opencode-data:/home/opencode/.local/share \
   -v opencode-state:/home/opencode/.local/state \
-  ghcr.io/wyvernzora/n8n-acp/harness-opencode:dev
+  ghcr.io/wyvernzora/n8n-acp/opencode:dev
 ```
 
 Sign in to OpenAI inside the running container:
