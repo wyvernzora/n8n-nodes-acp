@@ -23,7 +23,7 @@ export class AcpAgentApi implements ICredentialType {
 			name: 'note',
 			type: 'notice',
 			default: '',
-			description: 'Authentication is configured in the harness sidecar for now',
+			description: 'Harness runtimes handle their own model provider authentication. Mount or configure provider credentials in the harness, and consult the harness documentation for details.',
 		},
 	];
 }

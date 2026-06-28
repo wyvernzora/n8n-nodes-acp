@@ -22,6 +22,12 @@ export class AcpAgent implements INodeType {
 		version: 1,
 		description: 'Run workflow data through an ACP-enabled agent harness',
 		defaults: { name: 'ACP Agent' },
+		codex: {
+			categories: ['AI'],
+			subcategories: {
+				AI: ['Agents', 'Root Nodes'],
+			},
+		},
 		inputs: `={{ [{ type: '${NodeConnectionTypes.Main}' }, { displayName: 'Tools', type: '${NodeConnectionTypes.AiTool}' }, ...($parameter.hasOutputParser ? [{ displayName: 'Output Parser', maxConnections: 1, type: '${NodeConnectionTypes.AiOutputParser}' }] : [])] }}`,
 		outputs: [NodeConnectionTypes.Main],
 		builderHint: {
