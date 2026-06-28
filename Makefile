@@ -51,7 +51,7 @@ harness-lint:
 		echo "golangci-lint not found. Install it with: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest"; \
 		exit 127; \
 	fi
-	cd harness/runtime && $(GOLANGCI_LINT) run ./...
+	$(GOLANGCI_LINT) run ./harness/runtime/...
 
 harness-smoke:
 	scripts/smoke-opencode-acp.sh

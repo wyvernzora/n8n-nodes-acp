@@ -7,20 +7,25 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
 const requestTimeout = 10 * time.Minute
+const mcpStartupWait = 5 * time.Second
 
 type Config struct {
 	Host          string
 	Port          string
+	MCPHost       string
+	MCPPort       string
 	WorkerCommand string
 	WorkerArgs    []string
 	BridgeCommand string
@@ -36,12 +41,15 @@ type forwardedRequest struct {
 	client     *clientConn
 	originalID json.RawMessage
 	method     string
+	toolIDs    []string
 }
 
 type workerProxy struct {
 	cfg         Config
 	bridge      net.Listener
 	bridgePath  string
+	mcpHTTP     net.Listener
+	mcpHTTPURL  string
 	workerIn    io.WriteCloser
 	workerWrite sync.Mutex
 	nextClient  atomic.Int64
@@ -51,7 +59,10 @@ type workerProxy struct {
 	clients       map[string]*clientConn
 	pendingWorker map[string]forwardedRequest
 	sessionOwners map[string]string
+	sessionTools  map[string][]string
 	toolOwners    map[string]string
+	toolReady     map[string]chan struct{}
+	toolMCPConn   map[string]string
 	mcpOwners     map[string]string
 }
 
@@ -80,6 +91,13 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer bridgeListener.Close()
 
+	mcpHTTPListener, err := net.Listen("tcp", net.JoinHostPort(cfg.MCPHost, cfg.MCPPort))
+	if err != nil {
+		return fmt.Errorf("listen MCP HTTP bridge: %w", err)
+	}
+	defer mcpHTTPListener.Close()
+	mcpHTTPURL := "http://" + mcpHTTPListener.Addr().String() + "/mcp/"
+
 	child, stdin, stdout, err := startWorker(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("start acp worker: %w", err)
@@ -96,15 +114,21 @@ func Run(ctx context.Context, cfg Config) error {
 		cfg:           cfg,
 		bridge:        bridgeListener,
 		bridgePath:    socketPath,
+		mcpHTTP:       mcpHTTPListener,
+		mcpHTTPURL:    mcpHTTPURL,
 		workerIn:      stdin,
 		clients:       map[string]*clientConn{},
 		pendingWorker: map[string]forwardedRequest{},
 		sessionOwners: map[string]string{},
+		sessionTools:  map[string][]string{},
 		toolOwners:    map[string]string{},
+		toolReady:     map[string]chan struct{}{},
+		toolMCPConn:   map[string]string{},
 		mcpOwners:     map[string]string{},
 	}
 	defer proxy.closeClients("acp worker closed")
 	go proxy.acceptBridges(ctx)
+	go proxy.serveMCPHTTP(ctx)
 
 	listener, err := net.Listen("tcp", net.JoinHostPort(cfg.Host, cfg.Port))
 	if err != nil {
@@ -162,6 +186,63 @@ func (p *workerProxy) acceptBridges(ctx context.Context) {
 	}
 }
 
+func (p *workerProxy) serveMCPHTTP(ctx context.Context) {
+	server := &http.Server{Handler: http.HandlerFunc(p.handleMCPHTTP)}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	}()
+	if err := server.Serve(p.mcpHTTP); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		_, _ = fmt.Fprintln(p.cfg.ErrorWriter, err)
+	}
+}
+
+func (p *workerProxy) handleMCPHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	acpID := strings.TrimPrefix(r.URL.Path, "/mcp/")
+	if acpID == "" || acpID == r.URL.Path {
+		http.NotFound(w, r)
+		return
+	}
+	defer r.Body.Close()
+
+	var msg rpcMessage
+	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil || msg.Method == "" {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	result, err := p.handleMCP(acpID, msg)
+	if len(msg.ID) == 0 {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	response := rpcMessage{JSONRPC: "2.0", ID: msg.ID}
+	if err != nil {
+		code := -32000
+		var methodErr *mcpError
+		if errors.As(err, &methodErr) {
+			code = methodErr.code
+		}
+		response.Error = &rpcError{Code: code, Message: err.Error()}
+	} else {
+		switch {
+		case result != nil:
+			response.Result = rawObject(result)
+		default:
+			response.Result = json.RawMessage(`{}`)
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		_, _ = fmt.Fprintln(p.cfg.ErrorWriter, err)
+	}
+}
+
 func (p *workerProxy) handleBridge(conn net.Conn) {
 	defer conn.Close()
 	_ = scanLines(conn, func(line []byte) error {
@@ -182,6 +263,108 @@ func (p *workerProxy) handleBridge(conn net.Conn) {
 		}
 		return writeLine(conn, data)
 	})
+}
+
+func (p *workerProxy) handleMCP(acpID string, msg rpcMessage) (any, error) {
+	switch msg.Method {
+	case "initialize":
+		var params struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		}
+		_ = json.Unmarshal(msg.Params, &params)
+		if params.ProtocolVersion == "" {
+			params.ProtocolVersion = "2024-11-05"
+		}
+		return map[string]any{
+			"protocolVersion": params.ProtocolVersion,
+			"capabilities":    map[string]any{"tools": map[string]any{}},
+			"serverInfo":      map[string]any{"name": "n8n-acp-tools", "version": "0.0.0"},
+		}, nil
+	case "notifications/initialized":
+		return nil, nil
+	case "ping":
+		return map[string]any{}, nil
+	case "tools/list", "tools/call":
+		connectionID, err := p.mcpConnection(acpID)
+		if err != nil {
+			return nil, err
+		}
+		params := msg.Params
+		if len(params) == 0 {
+			params = json.RawMessage(`{}`)
+		}
+		result, err := p.request("mcp/message", rawObject(map[string]any{
+			"connectionId": connectionID,
+			"method":       msg.Method,
+			"params":       params,
+		}))
+		if err == nil && msg.Method == "tools/list" {
+			p.markToolReady(acpID)
+		}
+		return result, err
+	default:
+		return nil, &mcpError{code: -32601, message: "unknown mcp method: " + msg.Method}
+	}
+}
+
+func (p *workerProxy) mcpConnection(acpID string) (string, error) {
+	p.mu.Lock()
+	connectionID := p.toolMCPConn[acpID]
+	p.mu.Unlock()
+	if connectionID != "" {
+		return connectionID, nil
+	}
+
+	result, err := p.request("mcp/connect", rawObject(map[string]any{"acpId": acpID}))
+	if err != nil {
+		return "", err
+	}
+	connectionID = resultConnectionID(result)
+	if connectionID == "" {
+		return "", errors.New("mcp/connect did not return connectionId")
+	}
+	p.mu.Lock()
+	p.toolMCPConn[acpID] = connectionID
+	p.mu.Unlock()
+	return connectionID, nil
+}
+
+func (p *workerProxy) markToolReady(acpID string) {
+	p.mu.Lock()
+	ch := p.toolReady[acpID]
+	if ch != nil {
+		close(ch)
+		delete(p.toolReady, acpID)
+	}
+	p.mu.Unlock()
+}
+
+func (p *workerProxy) waitForSessionTools(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	p.mu.Lock()
+	toolIDs := append([]string(nil), p.sessionTools[sessionID]...)
+	waiting := make([]chan struct{}, 0, len(toolIDs))
+	for _, toolID := range toolIDs {
+		if ch := p.toolReady[toolID]; ch != nil {
+			waiting = append(waiting, ch)
+		}
+	}
+	p.mu.Unlock()
+	if len(waiting) == 0 {
+		return
+	}
+
+	timer := time.NewTimer(mcpStartupWait)
+	defer timer.Stop()
+	for _, ch := range waiting {
+		select {
+		case <-ch:
+		case <-timer.C:
+			return
+		}
+	}
 }
 
 func (p *workerProxy) request(method string, params json.RawMessage) (json.RawMessage, error) {
@@ -343,7 +526,7 @@ func (p *workerProxy) handleClient(ctx context.Context, conn net.Conn) error {
 			return p.forwardClientRequest(client, line, msg)
 		}
 		if msg.Method == "session/new" {
-			line = rewriteSessionNew(line, p.bridgePath, p.cfg)
+			line = rewriteSessionNew(line, p.bridgePath, p.mcpHTTPURL, p.cfg)
 		}
 		return p.writeWorker(line)
 	})
@@ -368,12 +551,21 @@ func (p *workerProxy) removeClient(client *clientConn, message string) {
 	}
 	for sessionID, ownerID := range p.sessionOwners {
 		if ownerID == client.id {
+			if toolIDs := p.sessionTools[sessionID]; len(toolIDs) > 0 {
+				for _, toolID := range toolIDs {
+					delete(p.toolReady, toolID)
+					delete(p.toolMCPConn, toolID)
+				}
+				delete(p.sessionTools, sessionID)
+			}
 			delete(p.sessionOwners, sessionID)
 		}
 	}
 	for toolID, ownerID := range p.toolOwners {
 		if ownerID == client.id {
 			delete(p.toolOwners, toolID)
+			delete(p.toolReady, toolID)
+			delete(p.toolMCPConn, toolID)
 		}
 	}
 	for connectionID, ownerID := range p.mcpOwners {
@@ -399,12 +591,16 @@ func (p *workerProxy) closeClients(message string) {
 }
 
 func (p *workerProxy) forwardClientRequest(client *clientConn, line []byte, msg rpcMessage) error {
+	var toolIDs []string
 	if msg.Method == "session/new" {
-		p.recordToolOwners(client, msg.Params)
-		line = rewriteSessionNew(line, p.bridgePath, p.cfg)
+		toolIDs = p.recordToolOwners(client, msg.Params)
+		line = rewriteSessionNew(line, p.bridgePath, p.mcpHTTPURL, p.cfg)
 		if err := json.Unmarshal(line, &msg); err != nil {
 			return err
 		}
+	}
+	if msg.Method == "session/prompt" {
+		p.waitForSessionTools(paramsSessionID(msg.Params))
 	}
 
 	workerID := "client:" + client.id + ":" + strconv.FormatInt(p.nextWorker.Add(1), 10)
@@ -424,6 +620,7 @@ func (p *workerProxy) forwardClientRequest(client *clientConn, line []byte, msg 
 		client:     client,
 		originalID: append(json.RawMessage(nil), msg.ID...),
 		method:     msg.Method,
+		toolIDs:    toolIDs,
 	}
 	p.mu.Unlock()
 	if err := p.writeWorker(encoded); err != nil {
@@ -469,6 +666,9 @@ func (p *workerProxy) routeWorkerResponse(line []byte, msg rpcMessage) error {
 		if sessionID := resultSessionID(msg.Result); sessionID != "" {
 			p.mu.Lock()
 			p.sessionOwners[sessionID] = forwarded.client.id
+			if len(forwarded.toolIDs) > 0 {
+				p.sessionTools[sessionID] = append([]string(nil), forwarded.toolIDs...)
+			}
 			p.mu.Unlock()
 		}
 	}
@@ -532,13 +732,17 @@ func (p *workerProxy) broadcast(line []byte) {
 	}
 }
 
-func (p *workerProxy) recordToolOwners(client *clientConn, params json.RawMessage) {
+func (p *workerProxy) recordToolOwners(client *clientConn, params json.RawMessage) []string {
 	ids := paramsACPMCPIDs(params)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, acpID := range ids {
 		p.toolOwners[acpID] = client.id
+		if _, ok := p.toolReady[acpID]; !ok {
+			p.toolReady[acpID] = make(chan struct{})
+		}
 	}
+	return ids
 }
 
 func startWorker(ctx context.Context, cfg Config) (*exec.Cmd, io.WriteCloser, io.Reader, error) {
@@ -571,7 +775,7 @@ func acpMethod(method string) string {
 	}
 }
 
-func rewriteSessionNew(line []byte, socketPath string, cfg Config) []byte {
+func rewriteSessionNew(line []byte, socketPath string, mcpHTTPURL string, cfg Config) []byte {
 	var root map[string]any
 	if err := json.Unmarshal(line, &root); err != nil || root["method"] != "session/new" {
 		return line
@@ -595,11 +799,19 @@ func rewriteSessionNew(line []byte, socketPath string, cfg Config) []byte {
 		}
 		id, _ := server["id"].(string)
 		servers[i] = map[string]any{
-			"type":    "stdio",
+			"type":    "http",
 			"name":    name,
-			"command": cfg.BridgeCommand,
-			"args":    []string{"bridge", socketPath, id},
-			"env":     []any{},
+			"url":     mcpHTTPURL + id,
+			"headers": []any{},
+		}
+		if mcpHTTPURL == "" {
+			servers[i] = map[string]any{
+				"type":    "stdio",
+				"name":    name,
+				"command": cfg.BridgeCommand,
+				"args":    []string{"bridge", socketPath, id},
+				"env":     []any{},
+			}
 		}
 	}
 	encoded, err := json.Marshal(root)
@@ -674,6 +886,12 @@ func (c Config) withDefaults() Config {
 	}
 	if c.Port == "" {
 		c.Port = "8080"
+	}
+	if c.MCPHost == "" {
+		c.MCPHost = "127.0.0.1"
+	}
+	if c.MCPPort == "" {
+		c.MCPPort = "0"
 	}
 	if c.WorkerCommand == "" {
 		c.WorkerCommand = "opencode"

@@ -20,7 +20,6 @@ const REASONING_CATEGORY = 'thought_level';
 const DEFAULT_CWD = '/workspace';
 const DEFAULT_TIMEOUT_SECONDS = 120;
 const CONFIG_OPTIONS_CACHE_MS = 60_000;
-const MCP_STARTUP_SETTLE_MS = 1_000;
 
 const configOptionsCache = new Map<string, { expiresAt: number; promise: Promise<AcpConfigOption[]> }>();
 const sharedConnections = new Map<string, Promise<AcpConnection>>();
@@ -413,10 +412,6 @@ async function runAcpPrompt(endpoint: AcpEndpoint, input: AcpPrompt): Promise<st
 			throw new Error('ACP agent did not return a sessionId');
 		}
 		await applyConfigSelections(client, sessionId, configOptionsFromSession(session), input.config);
-		if (toolset !== undefined) {
-			// ponytail: Codex ACP has no success signal for MCP startup; replace with runtime handshake if this becomes flaky.
-			await sleep(MCP_STARTUP_SETTLE_MS);
-		}
 
 		const text: string[] = [];
 		unsubscribe = client.onMessage((message) => {
@@ -746,10 +741,6 @@ function agentTextChunk(message: JsonRpcMessage, sessionId: string): string | un
 
 function isObject(value: unknown): value is IDataObject {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 class AcpConnection {

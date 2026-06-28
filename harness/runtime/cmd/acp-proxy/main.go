@@ -36,6 +36,8 @@ func run(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("acp-proxy", flag.ContinueOnError)
 	fs.StringVar(&cfg.Host, "host", cfg.Host, "ACP listen host")
 	fs.StringVar(&cfg.Port, "port", cfg.Port, "ACP listen port")
+	fs.StringVar(&cfg.MCPHost, "mcp-host", cfg.MCPHost, "MCP HTTP bridge listen host")
+	fs.StringVar(&cfg.MCPPort, "mcp-port", cfg.MCPPort, "MCP HTTP bridge listen port")
 	fs.StringVar(&cfg.WorkerCommand, "worker-command", cfg.WorkerCommand, "ACP worker command")
 	fs.StringVar(&workerArgs, "worker-args", workerArgs, "ACP worker arguments")
 	fs.StringVar(&cfg.BridgeCommand, "bridge-command", cfg.BridgeCommand, "MCP bridge command")
