@@ -97,10 +97,18 @@ kubectl exec -it <n8n-pod> -c <codex-container> -- \
 - `CODEX_CONFIG` - JSON object merged into Codex session config.
 - `MODEL_PROVIDER` - model provider passed to Codex for new sessions.
 - `DEFAULT_AUTH_REQUEST` - ACP auth request JSON used when Codex requires auth.
-- `INITIAL_AGENT_MODE` - initial mode id, such as `read-only`, `agent`, or
-  `agent-full-access`.
+- `CODEX_AGENT_MODE` - harness mode: `auto-review` by default, or
+  `full-bypass` / `read-only`. `auto` is an alias for `auto-review`.
+- `INITIAL_AGENT_MODE` - raw adapter mode override: `read-only`, `agent`, or
+  `agent-full-access`. When set, this takes precedence over `CODEX_AGENT_MODE`.
 - `NO_BROWSER` - hide browser-based ChatGPT auth when set.
 - `APP_SERVER_LOGS` - directory for adapter logs.
+
+`CODEX_AGENT_MODE=auto-review` maps to Codex `agent` and injects
+`{"approvals_reviewer":"auto_review"}` into `CODEX_CONFIG`, letting Codex use
+its automatic permission reviewer instead of asking n8n for decisions.
+`CODEX_AGENT_MODE=full-bypass` maps to Codex `agent-full-access`, which never
+asks for approval and disables Codex sandboxing.
 
 The image installs `@openai/codex` and `@agentclientprotocol/codex-acp` in a
 builder stage, then copies only Node, the installed CLIs, their global modules,
