@@ -20,6 +20,7 @@ const REASONING_CATEGORY = 'thought_level';
 const DEFAULT_CWD = '/workspace';
 const DEFAULT_TIMEOUT_SECONDS = 120;
 const CONFIG_OPTIONS_CACHE_MS = 60_000;
+const MCP_STARTUP_SETTLE_MS = 1_000;
 
 const configOptionsCache = new Map<string, { expiresAt: number; promise: Promise<AcpConfigOption[]> }>();
 const sharedConnections = new Map<string, Promise<AcpConnection>>();
@@ -412,6 +413,10 @@ async function runAcpPrompt(endpoint: AcpEndpoint, input: AcpPrompt): Promise<st
 			throw new Error('ACP agent did not return a sessionId');
 		}
 		await applyConfigSelections(client, sessionId, configOptionsFromSession(session), input.config);
+		if (toolset !== undefined) {
+			// ponytail: Codex ACP has no success signal for MCP startup; replace with runtime handshake if this becomes flaky.
+			await sleep(MCP_STARTUP_SETTLE_MS);
+		}
 
 		const text: string[] = [];
 		unsubscribe = client.onMessage((message) => {
@@ -584,7 +589,7 @@ async function callTool(tools: AcpTool[], params: IDataObject): Promise<IDataObj
 	if (tool === undefined) {
 		throw new RpcError(-32602, 'Tool not found');
 	}
-	const args = isObject(params.arguments) ? params.arguments : {};
+	const args = isObject(params.arguments) ? normalizeToolArgs(params.arguments, tool.schema) : {};
 
 	try {
 		const result = await invokeTool(tool, args);
@@ -682,6 +687,38 @@ function isOptionalZod(value: unknown): boolean {
 	return isObject(value) && isObject(value._def) && ['ZodOptional', 'ZodDefault'].includes(String(value._def.typeName));
 }
 
+function normalizeToolArgs(args: IDataObject, schema: unknown): IDataObject {
+	if (!isObject(schema) || !isObject(schema._def)) {
+		return args;
+	}
+
+	const def = schema._def;
+	const typeName = String(def.typeName);
+	if (['ZodOptional', 'ZodNullable', 'ZodDefault'].includes(typeName)) {
+		return normalizeToolArgs(args, def.innerType);
+	}
+	if (typeName === 'ZodEffects') {
+		return normalizeToolArgs(args, def.schema);
+	}
+	if (typeName !== 'ZodObject') {
+		return args;
+	}
+
+	const shapeValue = typeof def.shape === 'function' ? (def.shape as () => unknown)() : def.shape;
+	const shape = isObject(shapeValue) ? shapeValue : {};
+	const normalized: IDataObject = { ...args };
+	for (const [key, child] of Object.entries(shape)) {
+		if (isOptionalZod(child) && normalized[key] === '') {
+			delete normalized[key];
+			continue;
+		}
+		if (isObject(normalized[key])) {
+			normalized[key] = normalizeToolArgs(normalized[key], child);
+		}
+	}
+	return normalized;
+}
+
 function fallbackToolSchema(): IDataObject {
 	return {
 		type: 'object',
@@ -709,6 +746,10 @@ function agentTextChunk(message: JsonRpcMessage, sessionId: string): string | un
 
 function isObject(value: unknown): value is IDataObject {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 class AcpConnection {
