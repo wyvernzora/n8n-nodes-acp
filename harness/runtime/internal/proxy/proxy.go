@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -30,6 +31,7 @@ type Config struct {
 	WorkerArgs    []string
 	BridgeCommand string
 	ErrorWriter   io.Writer
+	Logger        *slog.Logger
 }
 
 type pendingRequest struct {
@@ -51,6 +53,7 @@ type workerProxy struct {
 	mcpHTTP     net.Listener
 	mcpHTTPURL  string
 	workerIn    io.WriteCloser
+	logger      *slog.Logger
 	workerWrite sync.Mutex
 	nextClient  atomic.Int64
 	nextWorker  atomic.Int64
@@ -78,6 +81,10 @@ type clientConn struct {
 
 func Run(ctx context.Context, cfg Config) error {
 	cfg = cfg.withDefaults()
+	logger := cfg.Logger.With(
+		slog.String("component", "acp_proxy"),
+		slog.String("acp_addr", net.JoinHostPort(cfg.Host, cfg.Port)),
+	)
 	dir, err := os.MkdirTemp("", "acp-mcp-")
 	if err != nil {
 		return err
@@ -97,6 +104,11 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer mcpHTTPListener.Close()
 	mcpHTTPURL := "http://" + mcpHTTPListener.Addr().String() + "/mcp/"
+	logger.InfoContext(ctx, "starting acp proxy",
+		slog.String("mcp_addr", mcpHTTPListener.Addr().String()),
+		slog.String("worker_command", cfg.WorkerCommand),
+		slog.Int("worker_args_count", len(cfg.WorkerArgs)),
+	)
 
 	child, stdin, stdout, err := startWorker(ctx, cfg)
 	if err != nil {
@@ -117,6 +129,7 @@ func Run(ctx context.Context, cfg Config) error {
 		mcpHTTP:       mcpHTTPListener,
 		mcpHTTPURL:    mcpHTTPURL,
 		workerIn:      stdin,
+		logger:        logger,
 		clients:       map[string]*clientConn{},
 		pendingWorker: map[string]forwardedRequest{},
 		sessionOwners: map[string]string{},
@@ -135,6 +148,7 @@ func Run(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("listen ACP proxy: %w", err)
 	}
 	defer listener.Close()
+	logger.InfoContext(ctx, "acp proxy listening")
 
 	workerDone := make(chan error, 1)
 	go func() {
@@ -166,7 +180,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		go func() {
 			if err := proxy.handleClient(ctx, conn); err != nil && !errors.Is(err, net.ErrClosed) {
-				_, _ = fmt.Fprintln(cfg.ErrorWriter, err)
+				logger.WarnContext(ctx, "acp client failed", slog.Any("err", err))
 			}
 		}()
 	}
@@ -186,6 +200,13 @@ func (p *workerProxy) acceptBridges(ctx context.Context) {
 	}
 }
 
+func (p *workerProxy) log() *slog.Logger {
+	if p.logger != nil {
+		return p.logger
+	}
+	return defaultLogger(io.Discard)
+}
+
 func (p *workerProxy) serveMCPHTTP(ctx context.Context) {
 	server := &http.Server{Handler: http.HandlerFunc(p.handleMCPHTTP)}
 	go func() {
@@ -195,7 +216,7 @@ func (p *workerProxy) serveMCPHTTP(ctx context.Context) {
 		_ = server.Shutdown(shutdownCtx)
 	}()
 	if err := server.Serve(p.mcpHTTP); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		_, _ = fmt.Fprintln(p.cfg.ErrorWriter, err)
+		p.log().WarnContext(ctx, "mcp http bridge stopped with error", slog.Any("err", err))
 	}
 }
 
@@ -213,6 +234,10 @@ func (p *workerProxy) handleMCPHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var msg rpcMessage
 	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil || msg.Method == "" {
+		p.log().WarnContext(r.Context(), "rejected invalid mcp http request",
+			slog.String("acp_id", acpID),
+			slog.String("remote_addr", r.RemoteAddr),
+		)
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -223,6 +248,11 @@ func (p *workerProxy) handleMCPHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	response := rpcMessage{JSONRPC: "2.0", ID: msg.ID}
 	if err != nil {
+		p.log().WarnContext(r.Context(), "mcp http request failed",
+			slog.String("acp_id", acpID),
+			slog.String("method", msg.Method),
+			slog.Any("err", err),
+		)
 		code := -32000
 		var methodErr *mcpError
 		if errors.As(err, &methodErr) {
@@ -239,7 +269,7 @@ func (p *workerProxy) handleMCPHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
-		_, _ = fmt.Fprintln(p.cfg.ErrorWriter, err)
+		p.log().WarnContext(r.Context(), "write mcp http response failed", slog.Any("err", err))
 	}
 }
 
@@ -326,6 +356,10 @@ func (p *workerProxy) mcpConnection(acpID string) (string, error) {
 	p.mu.Lock()
 	p.toolMCPConn[acpID] = connectionID
 	p.mu.Unlock()
+	p.log().Debug("mcp tool connected",
+		slog.String("acp_id", acpID),
+		slog.String("connection_id", connectionID),
+	)
 	return connectionID, nil
 }
 
@@ -362,6 +396,11 @@ func (p *workerProxy) waitForSessionTools(sessionID string) {
 		select {
 		case <-ch:
 		case <-timer.C:
+			p.log().Warn("timed out waiting for mcp tools",
+				slog.String("session_id", sessionID),
+				slog.Int("tool_count", len(toolIDs)),
+				slog.Duration("timeout", mcpStartupWait),
+			)
 			return
 		}
 	}
@@ -505,6 +544,10 @@ func (c *clientConn) failPending(message string) {
 func (p *workerProxy) handleClient(ctx context.Context, conn net.Conn) error {
 	client := p.addClient(conn)
 	defer p.removeClient(client, "n8n client disconnected")
+	p.log().InfoContext(ctx, "acp client connected",
+		slog.String("client_id", client.id),
+		slog.String("remote_addr", conn.RemoteAddr().String()),
+	)
 
 	stopClose := context.AfterFunc(ctx, func() {
 		_ = conn.Close()
@@ -576,6 +619,7 @@ func (p *workerProxy) removeClient(client *clientConn, message string) {
 	p.mu.Unlock()
 	client.failPending(message)
 	_ = client.conn.Close()
+	p.log().Info("acp client disconnected", slog.String("client_id", client.id))
 }
 
 func (p *workerProxy) closeClients(message string) {
@@ -594,6 +638,12 @@ func (p *workerProxy) forwardClientRequest(client *clientConn, line []byte, msg 
 	var toolIDs []string
 	if msg.Method == "session/new" {
 		toolIDs = p.recordToolOwners(client, msg.Params)
+		if len(toolIDs) > 0 {
+			p.log().Info("registered acp toolset",
+				slog.String("client_id", client.id),
+				slog.Int("tool_count", len(toolIDs)),
+			)
+		}
 		line = rewriteSessionNew(line, p.bridgePath, p.mcpHTTPURL, p.cfg)
 		if err := json.Unmarshal(line, &msg); err != nil {
 			return err
@@ -629,6 +679,10 @@ func (p *workerProxy) forwardClientRequest(client *clientConn, line []byte, msg 
 		p.mu.Unlock()
 		return err
 	}
+	p.log().Debug("forwarded acp request",
+		slog.String("client_id", client.id),
+		slog.String("method", msg.Method),
+	)
 	return nil
 }
 
@@ -636,7 +690,7 @@ func (p *workerProxy) readWorker(stdout io.Reader) error {
 	return scanLines(stdout, func(line []byte) error {
 		var msg rpcMessage
 		if err := json.Unmarshal(line, &msg); err != nil {
-			_, _ = fmt.Fprintf(p.cfg.ErrorWriter, "ignore non-json acp worker output: %s\n", line)
+			p.log().Debug("ignored non-json acp worker output", slog.Int("bytes", len(line)))
 			return nil
 		}
 		if msg.Method == "" && len(msg.ID) > 0 {
@@ -670,7 +724,20 @@ func (p *workerProxy) routeWorkerResponse(line []byte, msg rpcMessage) error {
 				p.sessionTools[sessionID] = append([]string(nil), forwarded.toolIDs...)
 			}
 			p.mu.Unlock()
+			p.log().Info("registered acp session",
+				slog.String("client_id", forwarded.client.id),
+				slog.String("session_id", sessionID),
+				slog.Int("tool_count", len(forwarded.toolIDs)),
+			)
 		}
+	}
+	if msg.Error != nil {
+		p.log().Warn("worker request failed",
+			slog.String("client_id", forwarded.client.id),
+			slog.String("method", forwarded.method),
+			slog.Int("code", msg.Error.Code),
+			slog.String("err", msg.Error.Message),
+		)
 	}
 	encoded, err := json.Marshal(msg)
 	if err != nil {
@@ -682,6 +749,7 @@ func (p *workerProxy) routeWorkerResponse(line []byte, msg rpcMessage) error {
 func (p *workerProxy) routeWorkerMessage(line []byte, msg rpcMessage) error {
 	sessionID := paramsSessionID(msg.Params)
 	if sessionID == "" {
+		p.log().Warn("worker message missing session id", slog.String("method", msg.Method))
 		if len(msg.ID) > 0 {
 			return p.writeWorkerError(msg.ID, -32602, "worker request missing sessionId")
 		}
@@ -693,6 +761,10 @@ func (p *workerProxy) routeWorkerMessage(line []byte, msg rpcMessage) error {
 	client := p.clients[p.sessionOwners[sessionID]]
 	p.mu.Unlock()
 	if client == nil {
+		p.log().Warn("worker message for unowned session",
+			slog.String("method", msg.Method),
+			slog.String("session_id", sessionID),
+		)
 		if len(msg.ID) > 0 {
 			return p.writeWorkerError(msg.ID, -32602, "no n8n client owns session")
 		}
@@ -905,5 +977,27 @@ func (c Config) withDefaults() Config {
 	if c.ErrorWriter == nil {
 		c.ErrorWriter = os.Stderr
 	}
+	if c.Logger == nil {
+		c.Logger = defaultLogger(c.ErrorWriter)
+	}
 	return c
+}
+
+func defaultLogger(w io.Writer) *slog.Logger {
+	level := new(slog.LevelVar)
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("ACP_LOG_LEVEL"))) {
+	case "debug":
+		level.Set(slog.LevelDebug)
+	case "warn":
+		level.Set(slog.LevelWarn)
+	case "error":
+		level.Set(slog.LevelError)
+	default:
+		level.Set(slog.LevelInfo)
+	}
+	opts := &slog.HandlerOptions{Level: level}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("ACP_LOG_FORMAT")), "text") {
+		return slog.New(slog.NewTextHandler(w, opts))
+	}
+	return slog.New(slog.NewJSONHandler(w, opts))
 }

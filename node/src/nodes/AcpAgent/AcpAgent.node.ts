@@ -157,8 +157,10 @@ export class AcpAgent implements INodeType {
 		const endpoint = parseAcpEndpoint(String(credentials.baseUrl));
 		const items = this.getInputData();
 		const out: INodeExecutionData[] = [];
+		logInfo('execution started', { item_count: items.length, endpoint: endpointKey(endpoint) });
 
 		for (let i = 0; i < items.length; i++) {
+			const startedAt = Date.now();
 			try {
 				const outputParser = await outputParserForItem(this, i);
 				const tools = await connectedTools(this);
@@ -170,7 +172,18 @@ export class AcpAgent implements INodeType {
 					config: configValuesForItem(this, i),
 				});
 				out.push({ json: await outputForText(text, outputParser), pairedItem: { item: i } });
+				logInfo('item completed', {
+					item_index: i,
+					tool_count: tools.length,
+					output_parser: outputParser !== undefined,
+					duration_ms: Date.now() - startedAt,
+				});
 			} catch (error) {
+				logError('item failed', {
+					item_index: i,
+					duration_ms: Date.now() - startedAt,
+					err: errorMessage(error),
+				});
 				if (!this.continueOnFail()) {
 					throw error;
 				}
@@ -178,6 +191,7 @@ export class AcpAgent implements INodeType {
 			}
 		}
 
+		logInfo('execution completed', { item_count: items.length, output_count: out.length });
 		return [out];
 	}
 }
@@ -385,6 +399,35 @@ function errorMessage(error: unknown): string {
 	return String(error);
 }
 
+function logInfo(message: string, fields: IDataObject = {}): void {
+	log('info', message, fields);
+}
+
+function logWarn(message: string, fields: IDataObject = {}): void {
+	log('warn', message, fields);
+}
+
+function logError(message: string, fields: IDataObject = {}): void {
+	log('error', message, fields);
+}
+
+function log(level: string, message: string, fields: IDataObject): void {
+	const line = JSON.stringify({
+		ts: new Date().toISOString(),
+		level,
+		component: 'acp_agent_node',
+		msg: message,
+		...fields,
+	});
+	if (level === 'error') {
+		console.error(line);
+	} else if (level === 'warn') {
+		console.warn(line);
+	} else {
+		console.log(line);
+	}
+}
+
 function parseAcpEndpoint(rawUrl: string): AcpEndpoint {
 	const url = new URL(rawUrl.includes('://') ? rawUrl : `tcp://${rawUrl}`);
 	if (url.protocol !== 'tcp:') {
@@ -419,6 +462,12 @@ async function runAcpPrompt(endpoint: AcpEndpoint, input: AcpPrompt): Promise<st
 		if (sessionId === '') {
 			throw new Error('ACP agent did not return a sessionId');
 		}
+		logInfo('session created', {
+			session_id: sessionId,
+			tool_count: input.tools.length,
+			config_count: input.config.length,
+			timeout_ms: input.timeoutMs,
+		});
 		await applyConfigSelections(client, sessionId, configOptionsFromSession(session), input.config);
 
 		const text: string[] = [];
@@ -433,6 +482,10 @@ async function runAcpPrompt(endpoint: AcpEndpoint, input: AcpPrompt): Promise<st
 			sessionId,
 			prompt: [{ type: 'text', text: input.prompt }],
 		}, input.timeoutMs);
+		logInfo('session prompt completed', {
+			session_id: sessionId,
+			output_chars: text.join('').length,
+		});
 		return text.join('');
 	} finally {
 		unsubscribe?.();
@@ -472,11 +525,13 @@ async function sharedAcpConnection(endpoint: AcpEndpoint): Promise<AcpConnection
 
 	const promise = AcpConnection.connect(endpoint, 10_000)
 		.then(async (client) => {
+			logInfo('acp connection opened', { endpoint: key });
 			client.onClose(() => {
 				if (sharedConnections.get(key) === promise) {
 					sharedConnections.delete(key);
 					configOptionsCache.delete(key);
 				}
+				logWarn('acp connection closed', { endpoint: key });
 			});
 			await initializeAcp(client);
 			return client;
@@ -486,6 +541,7 @@ async function sharedAcpConnection(endpoint: AcpEndpoint): Promise<AcpConnection
 				sharedConnections.delete(key);
 				configOptionsCache.delete(key);
 			}
+			logError('acp connection failed', { endpoint: key, err: errorMessage(error) });
 			throw error;
 		});
 	sharedConnections.set(key, promise);
@@ -506,7 +562,8 @@ async function initializeAcp(client: AcpConnection): Promise<void> {
 				version: '0.0.0',
 			},
 		});
-	} catch {
+	} catch (error) {
+		logWarn('acp initialize failed', { err: errorMessage(error) });
 		// Some ACP adapters reject initialize but still accept session requests.
 	}
 }
@@ -522,6 +579,10 @@ async function applyConfigSelections(
 	for (const selection of selections) {
 		const option = configOptionForCategory(currentOptions, selection.category);
 		if (option === undefined) {
+			logWarn('config option unavailable', {
+				session_id: sessionId,
+				category: selection.category,
+			});
 			continue;
 		}
 		const result = await client.request('session/set_config_option', {
@@ -594,6 +655,7 @@ async function callTool(tools: AcpTool[], params: IDataObject): Promise<IDataObj
 	const name = typeof params.name === 'string' ? params.name : '';
 	const tool = tools.find((candidate) => candidate.name === name);
 	if (tool === undefined) {
+		logWarn('tool call rejected', { tool_name: name, err: 'tool not found' });
 		throw new RpcError(-32602, 'Tool not found');
 	}
 	const args = isObject(params.arguments) ? normalizeToolArgs(params.arguments, tool.schema) : {};
@@ -602,6 +664,7 @@ async function callTool(tools: AcpTool[], params: IDataObject): Promise<IDataObj
 		const result = await invokeTool(tool, args);
 		return formatToolResult(result);
 	} catch (error) {
+		logWarn('tool call failed', { tool_name: name, err: errorMessage(error) });
 		return {
 			isError: true,
 			content: [{ type: 'text', text: errorMessage(error) }],

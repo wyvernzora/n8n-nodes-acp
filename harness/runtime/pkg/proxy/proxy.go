@@ -5,6 +5,7 @@ package proxy
 import (
 	"context"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -20,6 +21,7 @@ type Config struct {
 	WorkerArgs    []string
 	BridgeCommand string
 	ErrorWriter   io.Writer
+	Logger        *slog.Logger
 }
 
 // DefaultConfig returns the OpenCode sidecar defaults.
@@ -63,6 +65,7 @@ func Run(ctx context.Context, cfg Config) error {
 		WorkerArgs:    cfg.WorkerArgs,
 		BridgeCommand: cfg.BridgeCommand,
 		ErrorWriter:   cfg.ErrorWriter,
+		Logger:        cfg.Logger,
 	})
 }
 

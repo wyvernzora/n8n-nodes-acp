@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"sync"
@@ -34,12 +35,17 @@ func RunBridge(ctx context.Context, socketPath string, acpID string) error {
 	if socketPath == "" || acpID == "" {
 		return errors.New("usage: acp-proxy bridge <socket> <acp-id>")
 	}
+	logger := defaultLogger(os.Stderr).With(
+		slog.String("component", "mcp_bridge"),
+		slog.String("acp_id", acpID),
+	)
 	var dialer net.Dialer
 	conn, err := dialer.DialContext(ctx, "unix", socketPath)
 	if err != nil {
 		return fmt.Errorf("connect bridge socket: %w", err)
 	}
 	defer conn.Close()
+	logger.InfoContext(ctx, "mcp bridge connected")
 	stopClose := context.AfterFunc(ctx, func() {
 		_ = conn.Close()
 	})
@@ -50,6 +56,7 @@ func RunBridge(ctx context.Context, socketPath string, acpID string) error {
 	defer func() {
 		if connectionID != "" {
 			_, _ = client.request("disconnect", rawObject(map[string]any{"connectionId": connectionID}))
+			logger.Info("mcp bridge disconnected", slog.String("connection_id", connectionID))
 		}
 	}()
 	go client.readLoop()
