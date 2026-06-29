@@ -10,10 +10,14 @@ mkdir -p "${codex_home}"
 if [ ! -f "${codex_home}/config.toml" ]; then
   cp /etc/codex/config.toml "${codex_home}/config.toml"
 fi
-rm -f \
+rm -rf \
   "${codex_home}/logs_2.sqlite" \
   "${codex_home}/logs_2.sqlite-wal" \
-  "${codex_home}/logs_2.sqlite-shm"
+  "${codex_home}/logs_2.sqlite-shm" \
+  "${codex_home}/sessions" \
+  "${codex_home}/.tmp" \
+  "${codex_home}/tmp" \
+  "${codex_home}/shell_snapshots"
 export CODEX_HOME="${codex_home}"
 
 if [ -z "${INITIAL_AGENT_MODE:-}" ]; then

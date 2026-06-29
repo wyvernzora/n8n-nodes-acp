@@ -89,6 +89,19 @@ kubectl exec -it <n8n-pod> -c <codex-container> -- \
   codex login --device-auth
 ```
 
+Example liveness probe:
+
+```yaml
+livenessProbe:
+  exec:
+    command:
+      - codex-acp-health
+  initialDelaySeconds: 30
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3
+```
+
 ## Environment
 
 - `ACP_HOST` - TCP listen host, default `127.0.0.1`.
@@ -97,6 +110,10 @@ kubectl exec -it <n8n-pod> -c <codex-container> -- \
 - `OPENAI_API_KEY` - fallback API key used by `codex-acp`.
 - `CODEX_CONFIG` - JSON object merged into Codex session config.
 - `CODEX_HOME` - Codex state directory, default `/home/codex/.codex`.
+- `CODEX_HEALTH_MAX_USED_PERCENT` - fail health checks above this disk-use
+  percentage, default `90`.
+- `CODEX_HEALTH_PATH` - path checked by `codex-acp-health`, default
+  `CODEX_HOME`.
 - `MODEL_PROVIDER` - model provider passed to Codex for new sessions.
 - `DEFAULT_AUTH_REQUEST` - ACP auth request JSON used when Codex requires auth.
 - `CODEX_AGENT_MODE` - harness mode: `auto-review` by default, or
@@ -114,9 +131,10 @@ asks for approval and disables Codex sandboxing.
 
 On startup the image copies a quiet default Codex config into `CODEX_HOME` only
 when no `config.toml` exists. It disables transcript persistence, analytics,
-feedback, and OpenTelemetry exporters. The entrypoint also removes Codex's
-local diagnostic log database files (`logs_2.sqlite*`) before starting Codex;
-auth and user config are left alone.
+feedback, and OpenTelemetry exporters. The entrypoint also removes disposable
+Codex state before starting Codex: `logs_2.sqlite*`, `sessions`, `.tmp`, `tmp`,
+and `shell_snapshots`. Auth, user config, plugins, skills, model cache, and
+main state DB files are left alone.
 
 The image installs `@openai/codex` and `@agentclientprotocol/codex-acp` in a
 builder stage, then copies only Node, the installed CLIs, their global modules,

@@ -30,9 +30,10 @@ COPY --from=codex-build /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY harness/codex/config.toml /etc/codex/config.toml
 COPY harness/codex/codex /usr/local/bin/codex
 COPY harness/codex/codex-acp /usr/local/bin/codex-acp
+COPY harness/codex/health.sh /usr/local/bin/codex-acp-health
 COPY harness/codex/listen.sh /usr/local/bin/codex-acp-listen
 COPY --from=runtime-build /out/codex-acp-proxy /usr/local/bin/codex-acp-proxy
-RUN chmod 0755 /usr/local/bin/codex /usr/local/bin/codex-acp /usr/local/bin/codex-acp-listen /usr/local/bin/codex-acp-proxy
+RUN chmod 0755 /usr/local/bin/codex /usr/local/bin/codex-acp /usr/local/bin/codex-acp-health /usr/local/bin/codex-acp-listen /usr/local/bin/codex-acp-proxy
 
 USER 10001:10001
 WORKDIR /workspace
@@ -43,5 +44,7 @@ ENV TMPDIR=/tmp/codex
 ENV NO_BROWSER=1
 
 EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD ["codex-acp-health"]
 
 ENTRYPOINT ["codex-acp-listen"]
