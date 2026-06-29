@@ -22,11 +22,12 @@ RUN set -eux; \
 	apt-get install -y --no-install-recommends ca-certificates; \
 	rm -rf /var/lib/apt/lists/*; \
 	useradd --create-home --uid 10001 --shell /usr/sbin/nologin codex; \
-	mkdir -p /workspace /home/codex/.codex /tmp/codex; \
-	chown -R codex:codex /workspace /home/codex /tmp/codex
+	mkdir -p /etc/codex /workspace /home/codex/.codex /tmp/codex; \
+	chown -R codex:codex /etc/codex /workspace /home/codex /tmp/codex
 
 COPY --from=codex-build /usr/local/bin/node /usr/local/bin/node
 COPY --from=codex-build /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY harness/codex/config.toml /etc/codex/config.toml
 COPY harness/codex/codex /usr/local/bin/codex
 COPY harness/codex/codex-acp /usr/local/bin/codex-acp
 COPY harness/codex/listen.sh /usr/local/bin/codex-acp-listen
@@ -37,6 +38,7 @@ USER 10001:10001
 WORKDIR /workspace
 
 ENV HOME=/home/codex
+ENV CODEX_HOME=/home/codex/.codex
 ENV TMPDIR=/tmp/codex
 ENV NO_BROWSER=1
 

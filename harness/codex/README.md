@@ -77,6 +77,7 @@ For browserless sidecar deployments, the image sets `NO_BROWSER=1` by default.
 Use mounted Codex state or API-key environment variables for auth:
 
 - mount Codex state at `/home/codex/.codex`
+- size the mounted Codex state above `1Gi`; `5Gi` is a safer floor for sidecar use
 - run `codex login --device-auth` inside the container
 - set `CODEX_API_KEY`
 - set `OPENAI_API_KEY` as the fallback API key
@@ -95,6 +96,7 @@ kubectl exec -it <n8n-pod> -c <codex-container> -- \
 - `CODEX_API_KEY` - API key used by `codex-acp`.
 - `OPENAI_API_KEY` - fallback API key used by `codex-acp`.
 - `CODEX_CONFIG` - JSON object merged into Codex session config.
+- `CODEX_HOME` - Codex state directory, default `/home/codex/.codex`.
 - `MODEL_PROVIDER` - model provider passed to Codex for new sessions.
 - `DEFAULT_AUTH_REQUEST` - ACP auth request JSON used when Codex requires auth.
 - `CODEX_AGENT_MODE` - harness mode: `auto-review` by default, or
@@ -109,6 +111,12 @@ kubectl exec -it <n8n-pod> -c <codex-container> -- \
 its automatic permission reviewer instead of asking n8n for decisions.
 `CODEX_AGENT_MODE=full-bypass` maps to Codex `agent-full-access`, which never
 asks for approval and disables Codex sandboxing.
+
+On startup the image copies a quiet default Codex config into `CODEX_HOME` only
+when no `config.toml` exists. It disables transcript persistence, analytics,
+feedback, and OpenTelemetry exporters. The entrypoint also removes Codex's
+local diagnostic log database files (`logs_2.sqlite*`) before starting Codex;
+auth and user config are left alone.
 
 The image installs `@openai/codex` and `@agentclientprotocol/codex-acp` in a
 builder stage, then copies only Node, the installed CLIs, their global modules,

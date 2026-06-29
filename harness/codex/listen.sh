@@ -4,6 +4,17 @@ set -eu
 host="${ACP_HOST:-127.0.0.1}"
 port="${ACP_PORT:-8080}"
 mode="${CODEX_AGENT_MODE:-auto-review}"
+codex_home="${CODEX_HOME:-${HOME}/.codex}"
+
+mkdir -p "${codex_home}"
+if [ ! -f "${codex_home}/config.toml" ]; then
+  cp /etc/codex/config.toml "${codex_home}/config.toml"
+fi
+rm -f \
+  "${codex_home}/logs_2.sqlite" \
+  "${codex_home}/logs_2.sqlite-wal" \
+  "${codex_home}/logs_2.sqlite-shm"
+export CODEX_HOME="${codex_home}"
 
 if [ -z "${INITIAL_AGENT_MODE:-}" ]; then
   case "${mode}" in
